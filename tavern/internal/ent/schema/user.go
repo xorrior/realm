@@ -34,7 +34,17 @@ func (User) Fields() []ent.Field {
 			Sensitive().
 			Unique().
 			Immutable().
-			Comment("OAuth Subject ID of the user"),
+			Optional().
+			Nillable().
+			Comment("OAuth Subject ID of the user (deprecated, kept for migration compatibility)"),
+		field.String("password_hash").
+			Sensitive().
+			Optional().
+			Nillable().
+			Annotations(
+				entgql.Skip(),
+			).
+			Comment("Bcrypt hash of the user's password"),
 		field.String("photo_url").
 			Comment("URL to the user's profile photo.").
 			SchemaType(map[string]string{

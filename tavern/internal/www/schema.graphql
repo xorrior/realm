@@ -4246,6 +4246,20 @@ input SubmitTaskResultInput {
   """Error message captured as the result of task execution failure."""
   error: String
 }
+input CreateUserInput {
+  """The username for the new user (3-25 characters)."""
+  name: String!
+
+  """The password for the new user (minimum 8 characters)."""
+  password: String!
+
+  """Whether the user should be an admin."""
+  isAdmin: Boolean
+
+  """Whether the user should be activated."""
+  isActivated: Boolean
+}
+
 input ImportRepositoryInput {
   """
   Optionally, specify directories to include.
@@ -4296,7 +4310,9 @@ type Mutation {
     ###
     # User
     ###
+    createUser(input: CreateUserInput!): User! @requireRole(role: ADMIN)
     updateUser(userID: ID!, input: UpdateUserInput!): User @requireRole(role: ADMIN)
+    changePassword(currentPassword: String!, newPassword: String!): Boolean! @requireRole(role: USER)
 
     ###
     # Credential

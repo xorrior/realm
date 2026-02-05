@@ -220,12 +220,14 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
+		ChangePassword   func(childComplexity int, currentPassword string, newPassword string) int
 		CreateCredential func(childComplexity int, input ent.CreateHostCredentialInput) int
 		CreateLink       func(childComplexity int, input ent.CreateLinkInput) int
 		CreateQuest      func(childComplexity int, beaconIDs []int, input ent.CreateQuestInput) int
 		CreateRepository func(childComplexity int, input ent.CreateRepositoryInput) int
 		CreateTag        func(childComplexity int, input ent.CreateTagInput) int
 		CreateTome       func(childComplexity int, input ent.CreateTomeInput) int
+		CreateUser       func(childComplexity int, input models.CreateUserInput) int
 		DeleteTome       func(childComplexity int, tomeID int) int
 		DisableLink      func(childComplexity int, linkID int) int
 		DropAllData      func(childComplexity int) int
@@ -1301,6 +1303,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.LinkEdge.Node(childComplexity), true
 
+	case "Mutation.changePassword":
+		if e.complexity.Mutation.ChangePassword == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_changePassword_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Mutation.ChangePassword(childComplexity, args["currentPassword"].(string), args["newPassword"].(string)), true
+
 	case "Mutation.createCredential":
 		if e.complexity.Mutation.CreateCredential == nil {
 			break
@@ -1372,6 +1386,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Mutation.CreateTome(childComplexity, args["input"].(ent.CreateTomeInput)), true
+
+	case "Mutation.createUser":
+		if e.complexity.Mutation.CreateUser == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createUser_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Mutation.CreateUser(childComplexity, args["input"].(models.CreateUserInput)), true
 
 	case "Mutation.deleteTome":
 		if e.complexity.Mutation.DeleteTome == nil {
@@ -2589,6 +2615,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCreateRepositoryInput,
 		ec.unmarshalInputCreateTagInput,
 		ec.unmarshalInputCreateTomeInput,
+		ec.unmarshalInputCreateUserInput,
 		ec.unmarshalInputHostCredentialOrder,
 		ec.unmarshalInputHostCredentialWhereInput,
 		ec.unmarshalInputHostFileOrder,
@@ -7187,7 +7214,9 @@ scalar Uint64
     ###
     # User
     ###
+    createUser(input: CreateUserInput!): User! @requireRole(role: ADMIN)
     updateUser(userID: ID!, input: UpdateUserInput!): User @requireRole(role: ADMIN)
+    changePassword(currentPassword: String!, newPassword: String!): Boolean! @requireRole(role: USER)
 
     ###
     # Credential
@@ -7244,6 +7273,20 @@ input SubmitTaskResultInput {
   """Error message captured as the result of task execution failure."""
   error: String
 }
+input CreateUserInput {
+  """The username for the new user (3-25 characters)."""
+  name: String!
+
+  """The password for the new user (minimum 8 characters)."""
+  password: String!
+
+  """Whether the user should be an admin."""
+  isAdmin: Boolean
+
+  """Whether the user should be activated."""
+  isActivated: Boolean
+}
+
 input ImportRepositoryInput {
   """
   Optionally, specify directories to include.

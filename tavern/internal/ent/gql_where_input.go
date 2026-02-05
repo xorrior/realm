@@ -6719,6 +6719,8 @@ type UserWhereInput struct {
 	OauthIDContains     *string  `json:"oauthIDContains,omitempty"`
 	OauthIDHasPrefix    *string  `json:"oauthIDHasPrefix,omitempty"`
 	OauthIDHasSuffix    *string  `json:"oauthIDHasSuffix,omitempty"`
+	OauthIDIsNil        bool     `json:"oauthIDIsNil,omitempty"`
+	OauthIDNotNil       bool     `json:"oauthIDNotNil,omitempty"`
 	OauthIDEqualFold    *string  `json:"oauthIDEqualFold,omitempty"`
 	OauthIDContainsFold *string  `json:"oauthIDContainsFold,omitempty"`
 
@@ -6920,6 +6922,12 @@ func (i *UserWhereInput) P() (predicate.User, error) {
 	}
 	if i.OauthIDHasSuffix != nil {
 		predicates = append(predicates, user.OauthIDHasSuffix(*i.OauthIDHasSuffix))
+	}
+	if i.OauthIDIsNil {
+		predicates = append(predicates, user.OauthIDIsNil())
+	}
+	if i.OauthIDNotNil {
+		predicates = append(predicates, user.OauthIDNotNil())
 	}
 	if i.OauthIDEqualFold != nil {
 		predicates = append(predicates, user.OauthIDEqualFold(*i.OauthIDEqualFold))

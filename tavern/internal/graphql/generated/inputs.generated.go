@@ -96,6 +96,54 @@ func (ec *executionContext) unmarshalInputClaimTasksInput(ctx context.Context, o
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputCreateUserInput(ctx context.Context, obj any) (models.CreateUserInput, error) {
+	var it models.CreateUserInput
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"name", "password", "isAdmin", "isActivated"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "password":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("password"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Password = data
+		case "isAdmin":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("isAdmin"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.IsAdmin = data
+		case "isActivated":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("isActivated"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.IsActivated = data
+		}
+	}
+
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputImportRepositoryInput(ctx context.Context, obj any) (models.ImportRepositoryInput, error) {
 	var it models.ImportRepositoryInput
 	asMap := map[string]any{}
@@ -189,6 +237,11 @@ func (ec *executionContext) unmarshalInputSubmitTaskResultInput(ctx context.Cont
 // endregion **************************** object.gotpl ****************************
 
 // region    ***************************** type.gotpl *****************************
+
+func (ec *executionContext) unmarshalNCreateUserInput2realmᚗpubᚋtavernᚋinternalᚋgraphqlᚋmodelsᚐCreateUserInput(ctx context.Context, v any) (models.CreateUserInput, error) {
+	res, err := ec.unmarshalInputCreateUserInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
 
 func (ec *executionContext) unmarshalOImportRepositoryInput2ᚖrealmᚗpubᚋtavernᚋinternalᚋgraphqlᚋmodelsᚐImportRepositoryInput(ctx context.Context, v any) (*models.ImportRepositoryInput, error) {
 	if v == nil {

@@ -132,7 +132,7 @@ func New(opts ...Option) *Mux {
 
 	// Default to in-memory if no client provided (useful for tests that don't pass client)
 	if m.pubsub == nil {
-		m.pubsub = pubsub.NewClient(pubsub.WithInMemoryDriver())
+		m.pubsub = pubsub.NewClient()
 	}
 
 	return m

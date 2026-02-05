@@ -1,6 +1,6 @@
 import { EmptyState, EmptyStateType } from "../tavern-base-ui/EmptyState";
 import { useAuthorization } from "../../context/AuthorizationContext";
-import { ReactNode } from "react";
+import { ReactNode, useEffect } from "react";
 
 type Props = {
     children: ReactNode;
@@ -9,6 +9,11 @@ export const AccessGate = ({ children }: Props) => {
     const { data, isLoading, error } = useAuthorization();
     const userData = data?.me || null;
 
+    useEffect(() => {
+        if (!isLoading && error) {
+            window.location.href = "/login";
+        }
+    }, [isLoading, error]);
 
     if (isLoading) {
         return (
@@ -21,7 +26,7 @@ export const AccessGate = ({ children }: Props) => {
     if (error) {
         return (
             <div className="flex flex-row w-sceen h-screen justify-center items-center">
-                <EmptyState label="Error fetching authorization state" type={EmptyStateType.error} details="Please contact your admin to diagnose the issue." />
+                <EmptyState label="Redirecting to login..." type={EmptyStateType.loading} />
             </div>
         );
     }

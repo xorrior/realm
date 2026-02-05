@@ -2,14 +2,11 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 	"realm.pub/tavern/internal/ent/migrate"
 	"realm.pub/tavern/internal/ent/tag"
 )
@@ -101,72 +98,6 @@ func TestConfigureMySQLFromEnv(t *testing.T) {
 		// Create an ent to assert we're not impacted by a "no such table:" bug, which can happen if DBLimits are not properly applied
 		_, err = client.Tag.Create().SetName("Test").SetKind(tag.KindGroup).Save(context.Background())
 		require.NoError(t, err)
-	})
-}
-
-// TestConfigureOAuthFromEnv ensures environment variables set the proper config values.
-func TestConfigureOAuthFromEnv(t *testing.T) {
-	cleanup := func() {
-		require.NoError(t, os.Unsetenv(EnvOAuthClientID.Key))
-		require.NoError(t, os.Unsetenv(EnvOAuthClientSecret.Key))
-		require.NoError(t, os.Unsetenv(EnvOAuthDomain.Key))
-	}
-
-	t.Run("NoEnvVarsSet", func(t *testing.T) {
-		defer cleanup()
-
-		cfg := &Config{}
-		ConfigureOAuthFromEnv("/redirect/here")(cfg)
-
-		assert.Equal(t, oauth2.Config{}, cfg.oauth)
-	})
-
-	t.Run("WithoutDomainSchema", func(t *testing.T) {
-		defer cleanup()
-
-		expectedDomain := "domain.com"
-		expectedCfg := oauth2.Config{
-			ClientID:     "ABCDEFG",
-			ClientSecret: "beep-boop",
-			RedirectURL:  fmt.Sprintf("https://%s/redirect/here", expectedDomain),
-			Scopes: []string{
-				"https://www.googleapis.com/auth/userinfo.profile",
-			},
-			Endpoint: google.Endpoint,
-		}
-
-		require.NoError(t, os.Setenv(EnvOAuthClientID.Key, expectedCfg.ClientID))
-		require.NoError(t, os.Setenv(EnvOAuthClientSecret.Key, expectedCfg.ClientSecret))
-		require.NoError(t, os.Setenv(EnvOAuthDomain.Key, expectedDomain))
-
-		cfg := &Config{}
-		ConfigureOAuthFromEnv("/redirect/here")(cfg)
-
-		assert.Equal(t, expectedCfg, cfg.oauth)
-	})
-
-	t.Run("Enabled", func(t *testing.T) {
-		defer cleanup()
-
-		expectedDomain := "http://domain.com"
-		expectedCfg := oauth2.Config{
-			ClientID:     "ABCDEFG",
-			ClientSecret: "beep-boop",
-			RedirectURL:  fmt.Sprintf("%s/redirect/here", expectedDomain),
-			Scopes: []string{
-				"https://www.googleapis.com/auth/userinfo.profile",
-			},
-			Endpoint: google.Endpoint,
-		}
-
-		require.NoError(t, os.Setenv(EnvOAuthClientID.Key, expectedCfg.ClientID))
-		require.NoError(t, os.Setenv(EnvOAuthClientSecret.Key, expectedCfg.ClientSecret))
-		require.NoError(t, os.Setenv(EnvOAuthDomain.Key, expectedDomain))
-
-		cfg := &Config{}
-		ConfigureOAuthFromEnv("/redirect/here")(cfg)
-
-		assert.Equal(t, expectedCfg, cfg.oauth)
 	})
 }
 

@@ -18,8 +18,10 @@ type User struct {
 	ID int `json:"id,omitempty"`
 	// The name displayed for the user
 	Name string `json:"name,omitempty"`
-	// OAuth Subject ID of the user
-	OauthID string `json:"-"`
+	// OAuth Subject ID of the user (deprecated, kept for migration compatibility)
+	OauthID *string `json:"-"`
+	// Bcrypt hash of the user's password
+	PasswordHash *string `json:"-"`
 	// URL to the user's profile photo.
 	PhotoURL string `json:"photo_url,omitempty"`
 	// The session token currently authenticating the user
@@ -80,7 +82,7 @@ func (*User) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case user.FieldID:
 			values[i] = new(sql.NullInt64)
-		case user.FieldName, user.FieldOauthID, user.FieldPhotoURL, user.FieldSessionToken, user.FieldAccessToken:
+		case user.FieldName, user.FieldOauthID, user.FieldPasswordHash, user.FieldPhotoURL, user.FieldSessionToken, user.FieldAccessToken:
 			values[i] = new(sql.NullString)
 		case user.ForeignKeys[0]: // portal_active_users
 			values[i] = new(sql.NullInt64)
@@ -115,7 +117,15 @@ func (u *User) assignValues(columns []string, values []any) error {
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field oauth_id", values[i])
 			} else if value.Valid {
-				u.OauthID = value.String
+				u.OauthID = new(string)
+				*u.OauthID = value.String
+			}
+		case user.FieldPasswordHash:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field password_hash", values[i])
+			} else if value.Valid {
+				u.PasswordHash = new(string)
+				*u.PasswordHash = value.String
 			}
 		case user.FieldPhotoURL:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -204,6 +214,8 @@ func (u *User) String() string {
 	builder.WriteString(u.Name)
 	builder.WriteString(", ")
 	builder.WriteString("oauth_id=<sensitive>")
+	builder.WriteString(", ")
+	builder.WriteString("password_hash=<sensitive>")
 	builder.WriteString(", ")
 	builder.WriteString("photo_url=")
 	builder.WriteString(u.PhotoURL)

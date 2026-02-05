@@ -21,23 +21,28 @@ type Secret struct {
 
 type Secrets []Secret
 
-type DebugFileSecrets struct {
+type FileSecrets struct {
 	Name string
 	Path string
 }
 
+// NewDebugFileSecrets is a deprecated alias for NewFileSecrets.
 func NewDebugFileSecrets(path string) (SecretsManager, error) {
-	return DebugFileSecrets{
-		Name: "DebugFileSecrets",
+	return NewFileSecrets(path)
+}
+
+func NewFileSecrets(path string) (SecretsManager, error) {
+	return FileSecrets{
+		Name: "FileSecrets",
 		Path: path,
 	}, nil
 }
 
-func (s DebugFileSecrets) GetName() string {
+func (s FileSecrets) GetName() string {
 	return s.Name
 }
 
-func (s DebugFileSecrets) SetValue(key string, value []byte) ([]byte, error) {
+func (s FileSecrets) SetValue(key string, value []byte) ([]byte, error) {
 	path, err := s.ensureSecretsFileExist()
 	if err != nil {
 		slog.Error(fmt.Sprintf("failed to create secrets file %s: %v", path, err))
@@ -80,7 +85,7 @@ func (s DebugFileSecrets) SetValue(key string, value []byte) ([]byte, error) {
 	return old_value, nil
 }
 
-func (s DebugFileSecrets) GetValue(key string) ([]byte, error) {
+func (s FileSecrets) GetValue(key string) ([]byte, error) {
 	path := s.Path
 
 	secrets, err := s.getYamlStruct(path)
@@ -98,7 +103,7 @@ func (s DebugFileSecrets) GetValue(key string) ([]byte, error) {
 	return []byte{}, nil
 }
 
-func (s DebugFileSecrets) setYamlStruct(path string, secrets Secrets) error {
+func (s FileSecrets) setYamlStruct(path string, secrets Secrets) error {
 	data, err := yaml.Marshal(secrets)
 	if err != nil {
 		slog.Error(fmt.Sprintf("failed to parse file YAML %s: %v", path, err))
@@ -121,7 +126,7 @@ func (s DebugFileSecrets) setYamlStruct(path string, secrets Secrets) error {
 	return nil
 }
 
-func (s DebugFileSecrets) getYamlStruct(path string) (Secrets, error) {
+func (s FileSecrets) getYamlStruct(path string) (Secrets, error) {
 	file, err := os.OpenFile(path, os.O_RDWR, DEFAULT_PERMS)
 	if err != nil {
 		slog.Error(fmt.Sprintf("failed to open secrets file %s: %v", path, err))
@@ -148,7 +153,7 @@ func (s DebugFileSecrets) getYamlStruct(path string) (Secrets, error) {
 	return secrets, nil
 }
 
-func (s DebugFileSecrets) ensureSecretsFileExist() (string, error) {
+func (s FileSecrets) ensureSecretsFileExist() (string, error) {
 	_, err := os.Stat(s.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		// Create file

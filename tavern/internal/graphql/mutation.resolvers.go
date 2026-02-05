@@ -247,9 +247,76 @@ func (r *mutationResolver) ImportRepository(ctx context.Context, repoID int, inp
 	return repo.Update().SetLastImportedAt(time.Now()).Save(ctx)
 }
 
+// CreateUser is the resolver for the createUser field.
+func (r *mutationResolver) CreateUser(ctx context.Context, input models.CreateUserInput) (*ent.User, error) {
+	if len(input.Password) < 8 {
+		return nil, fmt.Errorf("password must be at least 8 characters")
+	}
+	if len(input.Name) < 3 || len(input.Name) > 25 {
+		return nil, fmt.Errorf("username must be between 3 and 25 characters")
+	}
+
+	hash, err := auth.HashPassword(input.Password)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	creator := r.client.User.Create().
+		SetName(input.Name).
+		SetPasswordHash(hash).
+		SetPhotoURL("")
+
+	if input.IsAdmin != nil {
+		creator.SetIsAdmin(*input.IsAdmin)
+	}
+	if input.IsActivated != nil {
+		creator.SetIsActivated(*input.IsActivated)
+	}
+
+	return creator.Save(ctx)
+}
+
 // UpdateUser is the resolver for the updateUser field.
 func (r *mutationResolver) UpdateUser(ctx context.Context, userID int, input ent.UpdateUserInput) (*ent.User, error) {
 	return r.client.User.UpdateOneID(userID).SetInput(input).Save(ctx)
+}
+
+// ChangePassword is the resolver for the changePassword field.
+func (r *mutationResolver) ChangePassword(ctx context.Context, currentPassword string, newPassword string) (bool, error) {
+	if len(newPassword) < 8 {
+		return false, fmt.Errorf("new password must be at least 8 characters")
+	}
+
+	authUser := auth.UserFromContext(ctx)
+	if authUser == nil {
+		return false, fmt.Errorf("no authenticated user")
+	}
+
+	// Load user with password hash
+	user, err := r.client.User.Get(ctx, authUser.ID)
+	if err != nil {
+		return false, fmt.Errorf("failed to load user: %w", err)
+	}
+
+	if user.PasswordHash == nil || *user.PasswordHash == "" {
+		return false, fmt.Errorf("user does not have a password set")
+	}
+
+	if !auth.CheckPassword(*user.PasswordHash, currentPassword) {
+		return false, fmt.Errorf("current password is incorrect")
+	}
+
+	hash, err := auth.HashPassword(newPassword)
+	if err != nil {
+		return false, fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	_, err = r.client.User.UpdateOneID(user.ID).SetPasswordHash(hash).Save(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to update password: %w", err)
+	}
+
+	return true, nil
 }
 
 // CreateCredential is the resolver for the createCredential field.

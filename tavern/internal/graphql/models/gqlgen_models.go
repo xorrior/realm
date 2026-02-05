@@ -28,6 +28,17 @@ type ClaimTasksInput struct {
 	AgentIdentifier string `json:"agentIdentifier"`
 }
 
+type CreateUserInput struct {
+	// The username for the new user (3-25 characters).
+	Name string `json:"name"`
+	// The password for the new user (minimum 8 characters).
+	Password string `json:"password"`
+	// Whether the user should be an admin.
+	IsAdmin *bool `json:"isAdmin,omitempty"`
+	// Whether the user should be activated.
+	IsActivated *bool `json:"isActivated,omitempty"`
+}
+
 type ImportRepositoryInput struct {
 	// Optionally, specify directories to include.
 	// Only tomes that have a main.eldritch in one of these directory prefixes will be included.

@@ -1,0 +1,39 @@
+services:
+  tavern:
+    build:
+      context: .
+      dockerfile: docker/tavern.Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MYSQL_ADDR=mysql:3306
+      - MYSQL_USER=tavern
+      - MYSQL_PASSWD=tavern
+      - MYSQL_DB=tavern
+      - SECRETS_FILE_PATH=/data/secrets
+    volumes:
+      - tavern-secrets:/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=tavern
+      - MYSQL_USER=tavern
+      - MYSQL_PASSWORD=tavern
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mysql-data:
+  tavern-secrets:

@@ -21,9 +21,19 @@ import { Tomes } from "./pages/tomes/Tomes";
 import { AdminPortal } from "./pages/admin/AdminPortal";
 import { CreateQuest } from "./pages/create-quest/CreateQuest";
 import { PageWrapper } from "./components/page-wrapper";
+import { Login } from "./pages/login/Login";
+import { Setup } from "./pages/setup/Setup";
 
 
 const router = createBrowserRouter([
+  {
+    path: "/login",
+    element: <Login />,
+  },
+  {
+    path: "/setup",
+    element: <Setup />,
+  },
   {
     path: "/",
     element: <PageWrapper />,

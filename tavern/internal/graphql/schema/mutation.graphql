@@ -41,7 +41,9 @@ type Mutation {
     ###
     # User
     ###
+    createUser(input: CreateUserInput!): User! @requireRole(role: ADMIN)
     updateUser(userID: ID!, input: UpdateUserInput!): User @requireRole(role: ADMIN)
+    changePassword(currentPassword: String!, newPassword: String!): Boolean! @requireRole(role: USER)
 
     ###
     # Credential

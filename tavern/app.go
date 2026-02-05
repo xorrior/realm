@@ -60,7 +60,6 @@ func newApp(ctx context.Context) (app *cli.App) {
 			ctx,
 			ConfigureHTTPServerFromEnv(),
 			ConfigureMySQLFromEnv(),
-			ConfigureOAuthFromEnv("/oauth/authorize"),
 		)
 	}
 	app.Commands = []cli.Command{
@@ -174,11 +173,14 @@ func (srv *Server) Close() error {
 
 // NewServer initializes a Tavern HTTP server with the provided configuration.
 func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
-	// Get server key pair from secrets manager (for OAuth)
+	// Get server key pair from secrets manager
 	pubKey, privKey, err := getKeyPairEd25519()
 	if err != nil {
 		log.Fatalf("[FATAL] failed to get ed25519 key pair: %v", err)
 	}
+	_ = pubKey
+	_ = privKey
+
 	// Initialize Config
 	cfg := &Config{}
 	for _, opt := range options {
@@ -216,15 +218,11 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 	}
 
 	// Configure Authentication
-	var withAuthentication tavernhttp.Option
-	if cfg.oauth.ClientID != "" {
-		withAuthentication = tavernhttp.WithAuthentication(client)
-	} else {
-		withAuthentication = tavernhttp.WithAuthenticationBypass(client)
-	}
+	withAuthentication := tavernhttp.WithAuthentication(client)
 
 	// Configure Request Logging
 	httpLogger := log.New(os.Stderr, "[HTTP] ", log.Flags())
+	_ = httpLogger
 
 	// Configure Shell Muxes
 	wsShellMux, grpcShellMux := cfg.NewShellMuxes(ctx)
@@ -251,20 +249,15 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 		},
 		"/access_token/redirect": tavernhttp.Endpoint{
 			Handler:          auth.NewTokenRedirectHandler(),
-			LoginRedirectURI: "/oauth/login",
+			LoginRedirectURI: "/auth/login",
 		},
-		"/oauth/login": tavernhttp.Endpoint{
-			Handler:              auth.NewOAuthLoginHandler(cfg.oauth, privKey),
+		"/auth/login": tavernhttp.Endpoint{
+			Handler:              auth.NewPasswordLoginHandler(client),
 			AllowUnauthenticated: true,
 			AllowUnactivated:     true,
 		},
-		"/oauth/authorize": tavernhttp.Endpoint{
-			Handler: auth.NewOAuthAuthorizationHandler(
-				cfg.oauth,
-				pubKey,
-				client,
-				cfg.userProfiles,
-			),
+		"/auth/setup": tavernhttp.Endpoint{
+			Handler:              auth.NewSetupHandler(client),
 			AllowUnauthenticated: true,
 			AllowUnactivated:     true,
 		},
@@ -299,12 +292,12 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 		},
 		"/": tavernhttp.Endpoint{
 			Handler:          www.NewHandler(httpLogger),
-			LoginRedirectURI: "/oauth/login",
+			LoginRedirectURI: "/auth/login",
 			AllowUnactivated: true,
 		},
 		"/playground": tavernhttp.Endpoint{
 			Handler:          playground.Handler("Realm - Red Team Engagement Platform", "/graphql"),
-			LoginRedirectURI: "/oauth/login",
+			LoginRedirectURI: "/auth/login",
 		},
 	}
 
@@ -421,15 +414,12 @@ func newGraphQLHandler(client *ent.Client, repoImporter graphql.RepoImporter) ht
 }
 
 func newSecretsManager() (secrets.SecretsManager, error) {
-	if EnvGCPProjectID.String() == "" && EnvSecretsManagerPath.String() == "" {
-		slog.Error("No configuration provided for secret manager path, using a potentially insecure default.")
-		return secrets.NewDebugFileSecrets("/tmp/tavern-secrets")
+	path := EnvSecretsManagerPath.String()
+	if path == "" {
+		slog.Warn("SECRETS_FILE_PATH not set, using default path ./tavern-secrets")
+		path = "./tavern-secrets"
 	}
-	if EnvSecretsManagerPath.String() == "" {
-		return secrets.NewGcp(EnvGCPProjectID.String())
-	}
-
-	return secrets.NewDebugFileSecrets(EnvSecretsManagerPath.String())
+	return secrets.NewFileSecrets(path)
 }
 
 func GetPubKey() (*ecdh.PublicKey, error) {

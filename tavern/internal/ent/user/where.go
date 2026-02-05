@@ -63,6 +63,11 @@ func OauthID(v string) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldOauthID, v))
 }
 
+// PasswordHash applies equality check predicate on the "password_hash" field. It's identical to PasswordHashEQ.
+func PasswordHash(v string) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldPasswordHash, v))
+}
+
 // PhotoURL applies equality check predicate on the "photo_url" field. It's identical to PhotoURLEQ.
 func PhotoURL(v string) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldPhotoURL, v))
@@ -208,6 +213,16 @@ func OauthIDHasSuffix(v string) predicate.User {
 	return predicate.User(sql.FieldHasSuffix(FieldOauthID, v))
 }
 
+// OauthIDIsNil applies the IsNil predicate on the "oauth_id" field.
+func OauthIDIsNil() predicate.User {
+	return predicate.User(sql.FieldIsNull(FieldOauthID))
+}
+
+// OauthIDNotNil applies the NotNil predicate on the "oauth_id" field.
+func OauthIDNotNil() predicate.User {
+	return predicate.User(sql.FieldNotNull(FieldOauthID))
+}
+
 // OauthIDEqualFold applies the EqualFold predicate on the "oauth_id" field.
 func OauthIDEqualFold(v string) predicate.User {
 	return predicate.User(sql.FieldEqualFold(FieldOauthID, v))
@@ -216,6 +231,81 @@ func OauthIDEqualFold(v string) predicate.User {
 // OauthIDContainsFold applies the ContainsFold predicate on the "oauth_id" field.
 func OauthIDContainsFold(v string) predicate.User {
 	return predicate.User(sql.FieldContainsFold(FieldOauthID, v))
+}
+
+// PasswordHashEQ applies the EQ predicate on the "password_hash" field.
+func PasswordHashEQ(v string) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldPasswordHash, v))
+}
+
+// PasswordHashNEQ applies the NEQ predicate on the "password_hash" field.
+func PasswordHashNEQ(v string) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldPasswordHash, v))
+}
+
+// PasswordHashIn applies the In predicate on the "password_hash" field.
+func PasswordHashIn(vs ...string) predicate.User {
+	return predicate.User(sql.FieldIn(FieldPasswordHash, vs...))
+}
+
+// PasswordHashNotIn applies the NotIn predicate on the "password_hash" field.
+func PasswordHashNotIn(vs ...string) predicate.User {
+	return predicate.User(sql.FieldNotIn(FieldPasswordHash, vs...))
+}
+
+// PasswordHashGT applies the GT predicate on the "password_hash" field.
+func PasswordHashGT(v string) predicate.User {
+	return predicate.User(sql.FieldGT(FieldPasswordHash, v))
+}
+
+// PasswordHashGTE applies the GTE predicate on the "password_hash" field.
+func PasswordHashGTE(v string) predicate.User {
+	return predicate.User(sql.FieldGTE(FieldPasswordHash, v))
+}
+
+// PasswordHashLT applies the LT predicate on the "password_hash" field.
+func PasswordHashLT(v string) predicate.User {
+	return predicate.User(sql.FieldLT(FieldPasswordHash, v))
+}
+
+// PasswordHashLTE applies the LTE predicate on the "password_hash" field.
+func PasswordHashLTE(v string) predicate.User {
+	return predicate.User(sql.FieldLTE(FieldPasswordHash, v))
+}
+
+// PasswordHashContains applies the Contains predicate on the "password_hash" field.
+func PasswordHashContains(v string) predicate.User {
+	return predicate.User(sql.FieldContains(FieldPasswordHash, v))
+}
+
+// PasswordHashHasPrefix applies the HasPrefix predicate on the "password_hash" field.
+func PasswordHashHasPrefix(v string) predicate.User {
+	return predicate.User(sql.FieldHasPrefix(FieldPasswordHash, v))
+}
+
+// PasswordHashHasSuffix applies the HasSuffix predicate on the "password_hash" field.
+func PasswordHashHasSuffix(v string) predicate.User {
+	return predicate.User(sql.FieldHasSuffix(FieldPasswordHash, v))
+}
+
+// PasswordHashIsNil applies the IsNil predicate on the "password_hash" field.
+func PasswordHashIsNil() predicate.User {
+	return predicate.User(sql.FieldIsNull(FieldPasswordHash))
+}
+
+// PasswordHashNotNil applies the NotNil predicate on the "password_hash" field.
+func PasswordHashNotNil() predicate.User {
+	return predicate.User(sql.FieldNotNull(FieldPasswordHash))
+}
+
+// PasswordHashEqualFold applies the EqualFold predicate on the "password_hash" field.
+func PasswordHashEqualFold(v string) predicate.User {
+	return predicate.User(sql.FieldEqualFold(FieldPasswordHash, v))
+}
+
+// PasswordHashContainsFold applies the ContainsFold predicate on the "password_hash" field.
+func PasswordHashContainsFold(v string) predicate.User {
+	return predicate.User(sql.FieldContainsFold(FieldPasswordHash, v))
 }
 
 // PhotoURLEQ applies the EQ predicate on the "photo_url" field.

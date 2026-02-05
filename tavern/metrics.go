@@ -5,7 +5,6 @@ import (
 	"log"
 	"time"
 
-	gcppubsub "cloud.google.com/go/pubsub/v2"
 	ocprometheus "contrib.go.opencensus.io/exporter/prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opencensus.io/stats/view"
@@ -42,25 +41,6 @@ var (
 func init() {
 	// Register metrics with Prometheus
 	prometheus.MustRegister(metricGRPCRequests, metricGRPCLatency, metricGRPCErrors)
-
-	// Register OpenCensus views for PubSub metrics
-	if err := view.Register(
-		&view.View{
-			Name:        "pubsub.googleapis.com/stream/open_count",
-			Description: "Count of stream opens",
-			Measure:     gcppubsub.StreamOpenCount,
-			Aggregation: view.Sum(),
-		},
-		&view.View{
-			Name:        "pubsub.googleapis.com/publish/latency",
-			Description: "Latency of publish operations",
-			Measure:     gcppubsub.PublishLatency,
-			// Latency buckets in milliseconds, from 0ms to 10s
-			Aggregation: view.Distribution(0, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000),
-		},
-	); err != nil {
-		log.Fatalf("Failed to register OpenCensus views: %v", err)
-	}
 
 	// Create and register OpenCensus Prometheus exporter
 	pe, err := ocprometheus.NewExporter(ocprometheus.Options{

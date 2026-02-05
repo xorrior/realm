@@ -16,6 +16,8 @@ const (
 	FieldName = "name"
 	// FieldOauthID holds the string denoting the oauth_id field in the database.
 	FieldOauthID = "oauth_id"
+	// FieldPasswordHash holds the string denoting the password_hash field in the database.
+	FieldPasswordHash = "password_hash"
 	// FieldPhotoURL holds the string denoting the photo_url field in the database.
 	FieldPhotoURL = "photo_url"
 	// FieldSessionToken holds the string denoting the session_token field in the database.
@@ -51,6 +53,7 @@ var Columns = []string{
 	FieldID,
 	FieldName,
 	FieldOauthID,
+	FieldPasswordHash,
 	FieldPhotoURL,
 	FieldSessionToken,
 	FieldAccessToken,
@@ -118,6 +121,11 @@ func ByName(opts ...sql.OrderTermOption) OrderOption {
 // ByOauthID orders the results by the oauth_id field.
 func ByOauthID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldOauthID, opts...).ToFunc()
+}
+
+// ByPasswordHash orders the results by the password_hash field.
+func ByPasswordHash(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPasswordHash, opts...).ToFunc()
 }
 
 // ByPhotoURL orders the results by the photo_url field.

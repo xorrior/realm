@@ -39,8 +39,7 @@ func (authenticator *bypassAuthenticator) Authenticate(r *http.Request) (context
 
 		authUser = authenticator.graph.User.Create().
 			SetName("auth-disabled").
-			SetOauthID("auth-disabled").
-			SetPhotoURL("https://upload.wikimedia.org/wikipedia/commons/a/ac/Default_pfp.jpg").
+			SetPhotoURL("").
 			SetIsActivated(true).
 			SetIsAdmin(true).
 			SaveX(r.Context())

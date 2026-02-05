@@ -25,22 +25,19 @@ func createTestData(ctx context.Context, client *ent.Client) {
 
 	client.User.Create().
 		SetName("Admin").
-		SetOauthID("AdminOAuthID").
-		SetPhotoURL("https://upload.wikimedia.org/wikipedia/commons/a/ac/Default_pfp.jpg").
+		SetPhotoURL("").
 		SetIsActivated(true).
 		SetIsAdmin(true).
 		SaveX(ctx)
 	client.User.Create().
 		SetName("Admin2").
-		SetOauthID("Admin2OAuthID").
-		SetPhotoURL("https://upload.wikimedia.org/wikipedia/commons/a/ac/Default_pfp.jpg").
+		SetPhotoURL("").
 		SetIsActivated(true).
 		SetIsAdmin(true).
 		SaveX(ctx)
 	client.User.Create().
 		SetName("User").
-		SetOauthID("UserOAuthID").
-		SetPhotoURL("https://upload.wikimedia.org/wikipedia/commons/a/ac/Default_pfp.jpg").
+		SetPhotoURL("").
 		SetIsActivated(true).
 		SetIsAdmin(false).
 		SaveX(ctx)

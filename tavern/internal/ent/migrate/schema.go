@@ -449,7 +449,8 @@ var (
 	UsersColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
 		{Name: "name", Type: field.TypeString, Size: 25},
-		{Name: "oauth_id", Type: field.TypeString, Unique: true},
+		{Name: "oauth_id", Type: field.TypeString, Unique: true, Nullable: true},
+		{Name: "password_hash", Type: field.TypeString, Nullable: true},
 		{Name: "photo_url", Type: field.TypeString, SchemaType: map[string]string{"mysql": "MEDIUMTEXT"}},
 		{Name: "session_token", Type: field.TypeString, Size: 200},
 		{Name: "access_token", Type: field.TypeString, Size: 200},
@@ -465,7 +466,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "users_portals_active_users",
-				Columns:    []*schema.Column{UsersColumns[8]},
+				Columns:    []*schema.Column{UsersColumns[9]},
 				RefColumns: []*schema.Column{PortalsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
