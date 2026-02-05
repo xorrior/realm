@@ -291,9 +291,9 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 			Handler: stream.NewPingHandler(client, wsShellMux),
 		},
 		"/": tavernhttp.Endpoint{
-			Handler:          www.NewHandler(httpLogger),
-			LoginRedirectURI: "/auth/login",
-			AllowUnactivated: true,
+			Handler:              www.NewHandler(httpLogger),
+			AllowUnauthenticated: true,
+			AllowUnactivated:     true,
 		},
 		"/playground": tavernhttp.Endpoint{
 			Handler:          playground.Handler("Realm - Red Team Engagement Platform", "/graphql"),
