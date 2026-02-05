@@ -25,28 +25,55 @@ Want to get involved? [Join our Discord!](https://discord.gg/W4cfwWRNZK)
 
 - **Effortless Multi-Host Management:** Juggling tasks across numerous machines during complex engagements? Realm simplifies the process, enabling you to control agents on multiple hosts simultaneously.
 
-- **Native GCP Integration:** Leverage the power and scalability of Google Cloud directly within your red team engagements. Realm seamlessly integrates with GCP services, boosting your attack capabilities without reinventing the wheel.
-
-- **Stateless Server Architecture:** While Realm officially supports GCP, you may deploy its [stateless docker container](https://hub.docker.com/r/spellshift/tavern) to any environment that best fits your needs.
+- **Cloud Agnostic Deployment:** Deploy Realm anywhere with Docker Compose or run directly. The [stateless docker container](https://hub.docker.com/r/spellshift/tavern) works in any environment - cloud, on-premise, or local development.
 
 - **Focus on Reliability:** Realm always prioritizes quality over quantity, enabling operators to focus on the engagement instead of spending hours troubleshooting bugs. Extensive testing and rigorous code review ensure unwavering reliability, while an intuitive design and clear documentation keep the learning curve minimal. After reaching a stable `1.0.0` release, Realm will follow [Semantic Versioning](https://semver.org/), ensuring the stability of older deployments.
 
 ## Quick Start
 
-*To deploy a production ready instance see the [setup guide](https://docs.realm.pub/admin-guide/tavern).*
+### Docker Compose (Recommended)
+
+The fastest way to deploy Realm with persistent storage:
 
 ```bash
 # Clone Realm
 git clone https://github.com/spellshift/realm.git && cd realm
-git checkout -b latest $(git tag | tail -1) # Checkout the latest stable releases
 
-# Start Tavern (Server)
-go run ./tavern
+# Start Tavern + MySQL
+docker-compose up -d --build
 
-# In a new terminal,
-# Start Imix (Agent)
+# Open http://localhost:8000 to create your admin account
+```
+
+On first visit, you'll be prompted to create an administrator account (username/password).
+
+### Manual Setup
+
+For development or custom deployments:
+
+```bash
+# Clone Realm
+git clone https://github.com/spellshift/realm.git && cd realm
+
+# Build the frontend
+cd tavern/internal/www && npm install && npm run build && cd ../../..
+
+# Start Tavern (with SQLite, for development)
+SECRETS_FILE_PATH=/tmp/tavern-secrets go run ./tavern
+
+# Or with MySQL
+MYSQL_ADDR=127.0.0.1:3306 MYSQL_USER=tavern MYSQL_PASSWD=tavern MYSQL_DB=tavern \
+SECRETS_FILE_PATH=/tmp/tavern-secrets go run ./tavern
+```
+
+Open `http://localhost:8000` to create your admin account, then start an agent:
+
+```bash
+# In a new terminal, start Imix (Agent)
 cd realm/implants/imix && cargo run
 ```
+
+For production deployments, see the [setup guide](https://docs.realm.pub/admin-guide/tavern).
 
 ## Project Components
 
@@ -63,9 +90,9 @@ cd realm/implants/imix && cargo run
 
 - Web interface.
 - Group actions.
-- graphql backend for easy API access.
-- OAuth login support.
-- Cloud native deployment with pre-made terraform for production deployments.
+- GraphQL backend for easy API access.
+- Username/password authentication with bcrypt.
+- Docker Compose deployment with MySQL.
 
 ### Built-in interpreter (eldritch)
 
