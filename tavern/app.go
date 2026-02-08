@@ -314,7 +314,9 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 	)
 
 	// Configure HTTP/2 (support for without TLS)
-	handler := h2c.NewHandler(srv, &http2.Server{})
+	handler := h2c.NewHandler(srv, &http2.Server{
+		MaxReadFrameSize: 16384,
+	})
 
 	// Initialize HTTP Server
 	if cfg.srv == nil {
@@ -508,6 +510,8 @@ func newGRPCHandler(client *ent.Client, grpcShellMux *stream.Mux, portalMux *mux
 	}
 	grpcSrv := grpc.NewServer(
 		grpc.ForceServerCodecV2(xchacha),
+		grpc.MaxRecvMsgSize(64<<20),
+		grpc.MaxSendMsgSize(64<<20),
 		grpc.UnaryInterceptor(grpcWithUnaryMetrics),
 		grpc.StreamInterceptor(grpcWithStreamMetrics),
 	)
