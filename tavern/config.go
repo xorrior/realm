@@ -61,6 +61,9 @@ var (
 	EnvDBMaxOpenConns    = EnvInteger{"DB_MAX_OPEN_CONNS", 100}
 	EnvDBMaxConnLifetime = EnvInteger{"DB_MAX_CONN_LIFETIME", 3600}
 
+	// EnvSchedulerURI selects the scheduler backend via a URI scheme (defaults to in-memory).
+	EnvSchedulerURI = EnvString{"SCHEDULER_URI", "mem://"}
+
 	// EnvPubSubTopicShellInput defines the topic to publish shell input to.
 	// EnvPubSubSubscriptionShellInput defines the subscription to receive shell input from.
 	// EnvPubSubTopicShellOutput defines the topic to publish shell output to.
@@ -74,10 +77,15 @@ var (
 
 	// EnvEnablePProf enables performance profiling and should not be enabled in production.
 	// EnvEnableMetrics enables the /metrics endpoint and HTTP server. It is unauthenticated and should be used carefully.
+	// EnvEnableAIMCP enables the AI MCP (Model Context Protocol) server endpoint.
 	EnvEnablePProf   = EnvBool{"ENABLE_PPROF"}
 	EnvEnableMetrics = EnvBool{"ENABLE_METRICS"}
+	EnvEnableAIMCP   = EnvBool{"ENABLE_AI_MCP"}
 
 	EnvSecretsManagerPath = EnvString{"SECRETS_FILE_PATH", ""}
+
+	// EnvPublicURL is the public-facing URL of Tavern, required when using an external scheduler.
+	EnvPublicURL = EnvString{"PUBLIC_URL", ""}
 )
 
 // Config holds information that controls the behaviour of Tavern
@@ -130,7 +138,12 @@ func (cfg *Config) Connect(options ...ent.Option) (*ent.Client, error) {
 	db.SetMaxIdleConns(maxIdleConns)
 	db.SetMaxOpenConns(maxOpenConns)
 	db.SetConnMaxLifetime(maxConnLifetime)
-	return ent.NewClient(append(options, ent.Driver(drv))...), nil
+	client := ent.NewClient(append(options, ent.Driver(drv))...)
+	client.Host.Use(ent.HookDeriveHostEvents())
+	client.Task.Use(ent.HookDeriveQuestEvents())
+	client.Event.Use(ent.HookDeriveNotifications())
+	client.User.Use(ent.HookDeriveUserRequestEvents())
+	return client, nil
 }
 
 func (cfg *Config) NewPortalMux(ctx context.Context) *mux.Mux {
@@ -203,6 +216,11 @@ func (cfg *Config) IsTestDataEnabled() bool {
 // IsTestRunAndExitEnabled returns true if a value for the "ENABLE_TEST_RUN_AND_EXIT" environment variable is set.
 func (cfg *Config) IsTestRunAndExitEnabled() bool {
 	return EnvEnableTestRunAndExit.IsSet()
+}
+
+// IsMCPEnabled returns true if the AI MCP endpoint has been enabled.
+func (cfg *Config) IsMCPEnabled() bool {
+	return EnvEnableAIMCP.IsSet()
 }
 
 // ConfigureHTTPServer enables the configuration of the Tavern HTTP server. The endpoint field will be

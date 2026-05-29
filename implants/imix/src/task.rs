@@ -1,46 +1,23 @@
 use alloc::collections::BTreeMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::SystemTime;
 
 use eldritch::agent::agent::Agent;
 use eldritch::assets::std::EmbeddedAssets;
-use eldritch::{Interpreter, Printer, Span, Value, conversion::ToValue};
-use pb::c2::{ReportTaskOutputRequest, Task, TaskContext, TaskError, TaskOutput};
+use eldritch::{Interpreter, Value, conversion::ToValue};
+use eldritch_agent::Context;
+use pb::c2::{
+    ReportOutputRequest, ReportTaskOutputMessage, Task, TaskContext, TaskError, TaskOutput,
+    report_output_request,
+};
 use prost_types::Timestamp;
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc;
 
-#[derive(Debug)]
-struct StreamPrinter {
-    tx: UnboundedSender<String>,
-}
-
-impl StreamPrinter {
-    fn new(tx: UnboundedSender<String>) -> Self {
-        Self { tx }
-    }
-}
-
-impl Printer for StreamPrinter {
-    fn print_out(&self, _span: &Span, s: &str) {
-        // We format with newline to match BufferPrinter behavior which separates lines
-        let _ = self.tx.send(format!("{}\n", s));
-    }
-
-    fn print_err(&self, _span: &Span, s: &str) {
-        // We format with newline to match BufferPrinter behavior
-        let _ = self.tx.send(format!("{}\n", s));
-    }
-}
-
-struct SubtaskHandle {
-    name: String,
-    _handle: tokio::task::JoinHandle<()>,
-}
+use crate::printer::StreamPrinter;
 
 struct TaskHandle {
     quest: String,
-    subtasks: Arc<RwLock<Vec<SubtaskHandle>>>,
 }
 
 #[derive(Clone)]
@@ -66,9 +43,10 @@ impl TaskRegistry {
             task_id: task.clone().id,
             jwt: task.clone().jwt,
         };
+        let context = Context::Task(task_context.clone());
 
         // 1. Register logic
-        // TODO: Should de-dupe Taks and TaskContext?
+        // TODO: Should de-dupe Tasks and TaskContext?
         if !self.register_task(&task) {
             return;
         }
@@ -78,19 +56,19 @@ impl TaskRegistry {
         let runtime_handle = tokio::runtime::Handle::current();
 
         // 2. Spawn thread
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "print_debug")]
         log::info!("Spawning Task: {0}", task_context.clone().task_id);
 
         thread::spawn(move || {
             if let Some(tome) = task.tome {
-                execute_task(task_context.clone(), tome, agent, runtime_handle);
+                execute_task(context, tome, agent, runtime_handle);
             } else {
-                #[cfg(debug_assertions)]
+                #[cfg(feature = "print_debug")]
                 log::warn!("Task {0} has no tome", task_context.clone().task_id);
             }
 
             // Cleanup
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "print_debug")]
             log::info!("Completed Task: {0}", task_context.clone().task_id);
             let mut tasks = tasks_registry.lock().unwrap();
             tasks.remove(&task_context.task_id);
@@ -106,31 +84,9 @@ impl TaskRegistry {
             task.id,
             TaskHandle {
                 quest: task.quest_name.clone(),
-                subtasks: Arc::new(RwLock::new(Vec::new())),
             },
         );
         true
-    }
-
-    pub fn register_subtask(
-        &self,
-        task_id: i64,
-        name: String,
-        handle: tokio::task::JoinHandle<()>,
-    ) {
-        let tasks = self.tasks.lock().unwrap();
-        if let Some(task) = tasks.get(&task_id) {
-            let mut subtasks = task.subtasks.write().unwrap();
-            subtasks.push(SubtaskHandle {
-                name,
-                _handle: handle,
-            });
-        } else {
-            // Task might have finished already, or this is an orphan subtask.
-            // In the future we might want to track these anyway.
-            #[cfg(debug_assertions)]
-            log::warn!("Attempted to register subtask '{name}' for non-existent task {task_id}");
-        }
     }
 
     pub fn list(&self) -> Vec<Task> {
@@ -148,44 +104,55 @@ impl TaskRegistry {
 
     pub fn stop(&self, task_id: i64) {
         let mut tasks = self.tasks.lock().unwrap();
-        if let Some(handle) = tasks.remove(&task_id) {
-            #[cfg(debug_assertions)]
+        if tasks.remove(&task_id).is_some() {
+            #[cfg(feature = "print_debug")]
             log::info!("Task {task_id} stop requested (thread may persist)");
-
-            let subtasks = handle.subtasks.read().unwrap();
-            for subtask in subtasks.iter() {
-                subtask._handle.abort();
-            }
         }
     }
 }
 
 fn execute_task(
-    task_context: TaskContext,
+    context: Context,
     tome: pb::eldritch::Tome,
     agent: Arc<dyn Agent>,
     runtime_handle: tokio::runtime::Handle,
 ) {
     // Setup StreamPrinter and Interpreter
     let (tx, rx) = mpsc::unbounded_channel();
-    let printer = Arc::new(StreamPrinter::new(tx));
-    let mut interp = setup_interpreter(task_context.clone(), &tome, agent.clone(), printer.clone());
+    let (error_tx, error_rx) = mpsc::unbounded_channel();
+    let printer = Arc::new(StreamPrinter::new(tx, error_tx));
+    let mut interp = setup_interpreter(context.clone(), &tome, agent.clone(), printer.clone());
+
+    let task_id = match &context {
+        Context::Task(tc) => tc.task_id,
+        _ => 0,
+    };
 
     // Report Start
-    report_start(task_context.clone(), &agent);
+    report_start(context.clone(), &agent);
 
     // Spawn output consumer task
     let consumer_join_handle = spawn_output_consumer(
-        task_context.clone(),
+        context.clone(),
         agent.clone(),
         runtime_handle.clone(),
         rx,
+        error_rx,
     );
 
     // Run Interpreter with panic protection
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         interp.interpret(&tome.eldritch)
     }));
+
+    // TODO: @Kcarretto remove this
+    // Send interpreter errors through the streaming error channel before closing it,
+    // ensuring errors are reported via the same path as eprint() output.
+    match &result {
+        Ok(Err(e)) => printer.report_error(e),
+        Err(e) => printer.report_error(&format!("panic: {e:?}")),
+        Ok(Ok(_)) => {}
+    }
 
     // Explicitly drop interp and printer to close channel
     drop(printer);
@@ -195,25 +162,25 @@ fn execute_task(
     match runtime_handle.block_on(consumer_join_handle) {
         Ok(_) => {}
         Err(_e) => {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "print_debug")]
             log::error!(
                 "task={0} failed to wait for output consumer to join: {_e}",
-                task_context.clone().task_id
+                task_id
             );
         }
     }
 
     // Handle result
     match result {
-        Ok(exec_result) => report_result(task_context, exec_result, &agent),
+        Ok(exec_result) => report_result(context, exec_result, &agent),
         Err(e) => {
-            report_panic(task_context, &agent, format!("panic: {e:?}"));
+            report_panic(context, &agent, format!("panic: {e:?}"));
         }
     }
 }
 
 fn setup_interpreter(
-    task_context: TaskContext,
+    context: Context,
     tome: &pb::eldritch::Tome,
     agent: Arc<dyn Agent>,
     printer: Arc<StreamPrinter>,
@@ -225,7 +192,7 @@ fn setup_interpreter(
     // Support embedded assets behind remote asset filenames
     let backend = Arc::new(EmbeddedAssets::<crate::assets::Asset>::new());
     // Register Task Context (Agent, Report, Assets)
-    interp = interp.with_task_context(agent, task_context, remote_assets, backend);
+    interp = interp.with_context(agent.clone(), context, remote_assets, backend);
 
     // Inject input_params
     let params_map: BTreeMap<String, String> = tome
@@ -239,115 +206,199 @@ fn setup_interpreter(
     interp
 }
 
-fn report_start(task_context: TaskContext, agent: &Arc<dyn Agent>) {
-    let task_id = task_context.task_id;
-    #[cfg(debug_assertions)]
+fn report_start(context: Context, agent: &Arc<dyn Agent>) {
+    let (task_id, task_context) = match context {
+        Context::Task(tc) => (tc.task_id, tc),
+        _ => return, // Only reporting for TaskContext
+    };
+
+    #[cfg(feature = "print_debug")]
     log::info!("task={task_id} Started execution");
 
-    match agent.report_task_output(ReportTaskOutputRequest {
-        output: Some(TaskOutput {
-            id: task_id,
-            output: String::new(),
-            error: None,
-            exec_started_at: Some(Timestamp::from(SystemTime::now())),
-            exec_finished_at: None,
-        }),
-        context: Some(task_context.into()),
+    match agent.report_output(ReportOutputRequest {
+        message: Some(report_output_request::Message::TaskOutput(
+            ReportTaskOutputMessage {
+                context: Some(task_context.clone()),
+                output: Some(TaskOutput {
+                    id: task_id,
+                    output: String::new(),
+                    error: None,
+                    exec_started_at: Some(Timestamp::from(SystemTime::now())),
+                    exec_finished_at: None,
+                }),
+            },
+        )),
     }) {
         Ok(_) => {}
         Err(_e) => {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "print_debug")]
             log::error!("task={task_id} failed to report task start: {_e}");
         }
     }
 }
 
 fn spawn_output_consumer(
-    task_context: TaskContext,
+    context: Context,
     agent: Arc<dyn Agent>,
     runtime_handle: tokio::runtime::Handle,
     mut rx: mpsc::UnboundedReceiver<String>,
+    mut error_rx: mpsc::UnboundedReceiver<String>,
 ) -> tokio::task::JoinHandle<()> {
     runtime_handle.spawn(async move {
-        #[cfg(debug_assertions)]
-        log::info!("task={} Started output stream", task_context.task_id);
-        let task_id = task_context.task_id;
-        while let Some(msg) = rx.recv().await {
-            match agent.report_task_output(ReportTaskOutputRequest {
-                output: Some(TaskOutput {
-                    id: task_id,
-                    output: msg,
-                    error: None,
-                    exec_started_at: None,
-                    exec_finished_at: None,
-                }),
-                context: Some(task_context.clone().into()),
-            }) {
-                Ok(_) => {}
-                Err(_e) => {
-                    #[cfg(debug_assertions)]
-                    log::error!("task={task_id} failed to report output: {_e}");
+        let (task_id, task_context) = match context {
+            Context::Task(tc) => (tc.task_id, tc),
+            _ => return, // Only reporting for TaskContext
+        };
+
+        #[cfg(feature = "print_debug")]
+        log::info!("task={} Started output stream", task_id);
+        let mut rx_open = true;
+        let mut error_rx_open = true;
+
+        loop {
+            tokio::select! {
+                val = rx.recv(), if rx_open => {
+                    match val {
+                        Some(msg) => {
+                            match agent.report_output(ReportOutputRequest {
+                                message: Some(report_output_request::Message::TaskOutput(
+                                    ReportTaskOutputMessage {
+                                        context: Some(task_context.clone()),
+                                        output: Some(TaskOutput {
+                                            id: task_id,
+                                            output: msg,
+                                            error: None,
+                                            exec_started_at: None,
+                                            exec_finished_at: None,
+                                        }),
+                                    },
+                                )),
+                            }) {
+                                Ok(_) => {}
+                                Err(_e) => {
+                                    #[cfg(feature = "print_debug")]
+                                    log::error!("task={task_id} failed to report output: {_e}");
+                                }
+                            }
+                        }
+                        None => {
+                            rx_open = false;
+                        }
+                    }
                 }
+                val = error_rx.recv(), if error_rx_open => {
+                    match val {
+                        Some(msg) => {
+                            match agent.report_output(ReportOutputRequest {
+                                message: Some(report_output_request::Message::TaskOutput(
+                                    ReportTaskOutputMessage {
+                                        context: Some(task_context.clone()),
+                                        output: Some(TaskOutput {
+                                            id: task_id,
+                                            output: String::new(),
+                                            error: Some(TaskError { msg }),
+                                            exec_started_at: None,
+                                            exec_finished_at: None,
+                                        }),
+                                    },
+                                )),
+                            }) {
+                                Ok(_) => {}
+                                Err(_e) => {
+                                    #[cfg(feature = "print_debug")]
+                                    log::error!("task={task_id} failed to report error: {_e}");
+                                }
+                            }
+                        }
+                        None => {
+                            error_rx_open = false;
+                        }
+                    }
+                }
+            }
+
+            if !rx_open && !error_rx_open {
+                break;
             }
         }
     })
 }
 
-fn report_panic(task_context: TaskContext, agent: &Arc<dyn Agent>, err: String) {
-    let task_id = task_context.task_id;
-    match agent.report_task_output(ReportTaskOutputRequest {
-        output: Some(TaskOutput {
-            id: task_id,
-            output: String::new(),
-            error: Some(TaskError { msg: err }),
-            exec_started_at: None,
-            exec_finished_at: Some(Timestamp::from(SystemTime::now())),
-        }),
-        context: Some(task_context.into()),
+fn report_panic(context: Context, agent: &Arc<dyn Agent>, err: String) {
+    let (task_id, task_context) = match context {
+        Context::Task(tc) => (tc.task_id, tc),
+        _ => return, // Only reporting for TaskContext
+    };
+
+    match agent.report_output(ReportOutputRequest {
+        message: Some(report_output_request::Message::TaskOutput(
+            ReportTaskOutputMessage {
+                context: Some(task_context.clone()),
+                output: Some(TaskOutput {
+                    id: task_id,
+                    output: String::new(),
+                    error: Some(TaskError { msg: err }),
+                    exec_started_at: None,
+                    exec_finished_at: Some(Timestamp::from(SystemTime::now())),
+                }),
+            },
+        )),
     }) {
         Ok(_) => {}
         Err(_e) => {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "print_debug")]
             log::error!("task={task_id} failed to report error: {_e}");
         }
     }
 }
 
-fn report_result(task_context: TaskContext, result: Result<Value, String>, agent: &Arc<dyn Agent>) {
-    let task_id = task_context.task_id;
+fn report_result(context: Context, result: Result<Value, String>, agent: &Arc<dyn Agent>) {
+    let (task_id, task_context) = match context {
+        Context::Task(tc) => (tc.task_id, tc),
+        _ => return, // Only reporting for TaskContext
+    };
+
     match result {
         Ok(v) => {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "print_debug")]
             log::info!("task={task_id} Success: {v}");
 
-            let _ = agent.report_task_output(ReportTaskOutputRequest {
-                output: Some(TaskOutput {
-                    id: task_id,
-                    output: String::new(),
-                    error: None,
-                    exec_started_at: None,
-                    exec_finished_at: Some(Timestamp::from(SystemTime::now())),
-                }),
-                context: Some(task_context.into()),
+            let _ = agent.report_output(ReportOutputRequest {
+                message: Some(report_output_request::Message::TaskOutput(
+                    ReportTaskOutputMessage {
+                        context: Some(task_context.clone()),
+                        output: Some(TaskOutput {
+                            id: task_id,
+                            output: String::new(),
+                            error: None,
+                            exec_started_at: None,
+                            exec_finished_at: Some(Timestamp::from(SystemTime::now())),
+                        }),
+                    },
+                )),
             });
         }
         Err(e) => {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "print_debug")]
             log::info!("task={task_id} Error: {e}");
 
-            match agent.report_task_output(ReportTaskOutputRequest {
-                output: Some(TaskOutput {
-                    id: task_id,
-                    output: String::new(),
-                    error: Some(TaskError { msg: e }),
-                    exec_started_at: None,
-                    exec_finished_at: Some(Timestamp::from(SystemTime::now())),
-                }),
-                context: Some(task_context.into()),
+            match agent.report_output(ReportOutputRequest {
+                message: Some(report_output_request::Message::TaskOutput(
+                    ReportTaskOutputMessage {
+                        context: Some(task_context.clone()),
+                        output: Some(TaskOutput {
+                            id: task_id,
+                            output: String::new(),
+                            error: Some(TaskError { msg: e }),
+                            exec_started_at: None,
+                            exec_finished_at: Some(Timestamp::from(SystemTime::now())),
+                        }),
+                    },
+                )),
             }) {
                 Ok(_) => {}
                 Err(_e) => {
-                    #[cfg(debug_assertions)]
+                    #[cfg(feature = "print_debug")]
                     log::error!("task={task_id} failed to report task error: {_e}");
                 }
             }

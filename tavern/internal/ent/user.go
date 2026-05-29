@@ -41,24 +41,48 @@ type User struct {
 
 // UserEdges holds the relations/edges for other nodes in the graph.
 type UserEdges struct {
+	// Notifications belonging to the user.
+	Notifications []*Notification `json:"notifications,omitempty"`
 	// Tomes uploaded by the user.
 	Tomes []*Tome `json:"tomes,omitempty"`
 	// Shells actively used by the user
 	ActiveShells []*Shell `json:"active_shells,omitempty"`
+	// Device auths approved by the user.
+	DeviceAuths []*DeviceAuth `json:"device_auths,omitempty"`
+	// Hosts favorited by the user.
+	FavoriteHosts []*Host `json:"favoriteHosts,omitempty"`
+	// Hosts the user is subscribed to.
+	SubscribedHosts []*Host `json:"subscribedHosts,omitempty"`
+	// Events associated with the user.
+	Events []*Event `json:"events,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [2]bool
+	loadedTypes [7]bool
 	// totalCount holds the count of the edges above.
-	totalCount [2]map[string]int
+	totalCount [7]map[string]int
 
-	namedTomes        map[string][]*Tome
-	namedActiveShells map[string][]*Shell
+	namedNotifications   map[string][]*Notification
+	namedTomes           map[string][]*Tome
+	namedActiveShells    map[string][]*Shell
+	namedDeviceAuths     map[string][]*DeviceAuth
+	namedFavoriteHosts   map[string][]*Host
+	namedSubscribedHosts map[string][]*Host
+	namedEvents          map[string][]*Event
+}
+
+// NotificationsOrErr returns the Notifications value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) NotificationsOrErr() ([]*Notification, error) {
+	if e.loadedTypes[0] {
+		return e.Notifications, nil
+	}
+	return nil, &NotLoadedError{edge: "notifications"}
 }
 
 // TomesOrErr returns the Tomes value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) TomesOrErr() ([]*Tome, error) {
-	if e.loadedTypes[0] {
+	if e.loadedTypes[1] {
 		return e.Tomes, nil
 	}
 	return nil, &NotLoadedError{edge: "tomes"}
@@ -67,10 +91,46 @@ func (e UserEdges) TomesOrErr() ([]*Tome, error) {
 // ActiveShellsOrErr returns the ActiveShells value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) ActiveShellsOrErr() ([]*Shell, error) {
-	if e.loadedTypes[1] {
+	if e.loadedTypes[2] {
 		return e.ActiveShells, nil
 	}
 	return nil, &NotLoadedError{edge: "active_shells"}
+}
+
+// DeviceAuthsOrErr returns the DeviceAuths value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) DeviceAuthsOrErr() ([]*DeviceAuth, error) {
+	if e.loadedTypes[3] {
+		return e.DeviceAuths, nil
+	}
+	return nil, &NotLoadedError{edge: "device_auths"}
+}
+
+// FavoriteHostsOrErr returns the FavoriteHosts value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) FavoriteHostsOrErr() ([]*Host, error) {
+	if e.loadedTypes[4] {
+		return e.FavoriteHosts, nil
+	}
+	return nil, &NotLoadedError{edge: "favoriteHosts"}
+}
+
+// SubscribedHostsOrErr returns the SubscribedHosts value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) SubscribedHostsOrErr() ([]*Host, error) {
+	if e.loadedTypes[5] {
+		return e.SubscribedHosts, nil
+	}
+	return nil, &NotLoadedError{edge: "subscribedHosts"}
+}
+
+// EventsOrErr returns the Events value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) EventsOrErr() ([]*Event, error) {
+	if e.loadedTypes[6] {
+		return e.Events, nil
+	}
+	return nil, &NotLoadedError{edge: "events"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -177,6 +237,11 @@ func (u *User) Value(name string) (ent.Value, error) {
 	return u.selectValues.Get(name)
 }
 
+// QueryNotifications queries the "notifications" edge of the User entity.
+func (u *User) QueryNotifications() *NotificationQuery {
+	return NewUserClient(u.config).QueryNotifications(u)
+}
+
 // QueryTomes queries the "tomes" edge of the User entity.
 func (u *User) QueryTomes() *TomeQuery {
 	return NewUserClient(u.config).QueryTomes(u)
@@ -185,6 +250,26 @@ func (u *User) QueryTomes() *TomeQuery {
 // QueryActiveShells queries the "active_shells" edge of the User entity.
 func (u *User) QueryActiveShells() *ShellQuery {
 	return NewUserClient(u.config).QueryActiveShells(u)
+}
+
+// QueryDeviceAuths queries the "device_auths" edge of the User entity.
+func (u *User) QueryDeviceAuths() *DeviceAuthQuery {
+	return NewUserClient(u.config).QueryDeviceAuths(u)
+}
+
+// QueryFavoriteHosts queries the "favoriteHosts" edge of the User entity.
+func (u *User) QueryFavoriteHosts() *HostQuery {
+	return NewUserClient(u.config).QueryFavoriteHosts(u)
+}
+
+// QuerySubscribedHosts queries the "subscribedHosts" edge of the User entity.
+func (u *User) QuerySubscribedHosts() *HostQuery {
+	return NewUserClient(u.config).QuerySubscribedHosts(u)
+}
+
+// QueryEvents queries the "events" edge of the User entity.
+func (u *User) QueryEvents() *EventQuery {
+	return NewUserClient(u.config).QueryEvents(u)
 }
 
 // Update returns a builder for updating this User.
@@ -233,6 +318,30 @@ func (u *User) String() string {
 	return builder.String()
 }
 
+// NamedNotifications returns the Notifications named value or an error if the edge was not
+// loaded in eager-loading with this name.
+func (u *User) NamedNotifications(name string) ([]*Notification, error) {
+	if u.Edges.namedNotifications == nil {
+		return nil, &NotLoadedError{edge: name}
+	}
+	nodes, ok := u.Edges.namedNotifications[name]
+	if !ok {
+		return nil, &NotLoadedError{edge: name}
+	}
+	return nodes, nil
+}
+
+func (u *User) appendNamedNotifications(name string, edges ...*Notification) {
+	if u.Edges.namedNotifications == nil {
+		u.Edges.namedNotifications = make(map[string][]*Notification)
+	}
+	if len(edges) == 0 {
+		u.Edges.namedNotifications[name] = []*Notification{}
+	} else {
+		u.Edges.namedNotifications[name] = append(u.Edges.namedNotifications[name], edges...)
+	}
+}
+
 // NamedTomes returns the Tomes named value or an error if the edge was not
 // loaded in eager-loading with this name.
 func (u *User) NamedTomes(name string) ([]*Tome, error) {
@@ -278,6 +387,102 @@ func (u *User) appendNamedActiveShells(name string, edges ...*Shell) {
 		u.Edges.namedActiveShells[name] = []*Shell{}
 	} else {
 		u.Edges.namedActiveShells[name] = append(u.Edges.namedActiveShells[name], edges...)
+	}
+}
+
+// NamedDeviceAuths returns the DeviceAuths named value or an error if the edge was not
+// loaded in eager-loading with this name.
+func (u *User) NamedDeviceAuths(name string) ([]*DeviceAuth, error) {
+	if u.Edges.namedDeviceAuths == nil {
+		return nil, &NotLoadedError{edge: name}
+	}
+	nodes, ok := u.Edges.namedDeviceAuths[name]
+	if !ok {
+		return nil, &NotLoadedError{edge: name}
+	}
+	return nodes, nil
+}
+
+func (u *User) appendNamedDeviceAuths(name string, edges ...*DeviceAuth) {
+	if u.Edges.namedDeviceAuths == nil {
+		u.Edges.namedDeviceAuths = make(map[string][]*DeviceAuth)
+	}
+	if len(edges) == 0 {
+		u.Edges.namedDeviceAuths[name] = []*DeviceAuth{}
+	} else {
+		u.Edges.namedDeviceAuths[name] = append(u.Edges.namedDeviceAuths[name], edges...)
+	}
+}
+
+// NamedFavoriteHosts returns the FavoriteHosts named value or an error if the edge was not
+// loaded in eager-loading with this name.
+func (u *User) NamedFavoriteHosts(name string) ([]*Host, error) {
+	if u.Edges.namedFavoriteHosts == nil {
+		return nil, &NotLoadedError{edge: name}
+	}
+	nodes, ok := u.Edges.namedFavoriteHosts[name]
+	if !ok {
+		return nil, &NotLoadedError{edge: name}
+	}
+	return nodes, nil
+}
+
+func (u *User) appendNamedFavoriteHosts(name string, edges ...*Host) {
+	if u.Edges.namedFavoriteHosts == nil {
+		u.Edges.namedFavoriteHosts = make(map[string][]*Host)
+	}
+	if len(edges) == 0 {
+		u.Edges.namedFavoriteHosts[name] = []*Host{}
+	} else {
+		u.Edges.namedFavoriteHosts[name] = append(u.Edges.namedFavoriteHosts[name], edges...)
+	}
+}
+
+// NamedSubscribedHosts returns the SubscribedHosts named value or an error if the edge was not
+// loaded in eager-loading with this name.
+func (u *User) NamedSubscribedHosts(name string) ([]*Host, error) {
+	if u.Edges.namedSubscribedHosts == nil {
+		return nil, &NotLoadedError{edge: name}
+	}
+	nodes, ok := u.Edges.namedSubscribedHosts[name]
+	if !ok {
+		return nil, &NotLoadedError{edge: name}
+	}
+	return nodes, nil
+}
+
+func (u *User) appendNamedSubscribedHosts(name string, edges ...*Host) {
+	if u.Edges.namedSubscribedHosts == nil {
+		u.Edges.namedSubscribedHosts = make(map[string][]*Host)
+	}
+	if len(edges) == 0 {
+		u.Edges.namedSubscribedHosts[name] = []*Host{}
+	} else {
+		u.Edges.namedSubscribedHosts[name] = append(u.Edges.namedSubscribedHosts[name], edges...)
+	}
+}
+
+// NamedEvents returns the Events named value or an error if the edge was not
+// loaded in eager-loading with this name.
+func (u *User) NamedEvents(name string) ([]*Event, error) {
+	if u.Edges.namedEvents == nil {
+		return nil, &NotLoadedError{edge: name}
+	}
+	nodes, ok := u.Edges.namedEvents[name]
+	if !ok {
+		return nil, &NotLoadedError{edge: name}
+	}
+	return nodes, nil
+}
+
+func (u *User) appendNamedEvents(name string, edges ...*Event) {
+	if u.Edges.namedEvents == nil {
+		u.Edges.namedEvents = make(map[string][]*Event)
+	}
+	if len(edges) == 0 {
+		u.Edges.namedEvents[name] = []*Event{}
+	} else {
+		u.Edges.namedEvents[name] = append(u.Edges.namedEvents[name], edges...)
 	}
 }
 

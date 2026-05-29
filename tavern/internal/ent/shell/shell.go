@@ -28,8 +28,14 @@ const (
 	EdgeBeacon = "beacon"
 	// EdgeOwner holds the string denoting the owner edge name in mutations.
 	EdgeOwner = "owner"
+	// EdgePortals holds the string denoting the portals edge name in mutations.
+	EdgePortals = "portals"
 	// EdgeActiveUsers holds the string denoting the active_users edge name in mutations.
 	EdgeActiveUsers = "active_users"
+	// EdgeShellTasks holds the string denoting the shell_tasks edge name in mutations.
+	EdgeShellTasks = "shell_tasks"
+	// EdgePivots holds the string denoting the pivots edge name in mutations.
+	EdgePivots = "pivots"
 	// Table holds the table name of the shell in the database.
 	Table = "shells"
 	// TaskTable is the table that holds the task relation/edge.
@@ -53,11 +59,32 @@ const (
 	OwnerInverseTable = "users"
 	// OwnerColumn is the table column denoting the owner relation/edge.
 	OwnerColumn = "shell_owner"
+	// PortalsTable is the table that holds the portals relation/edge.
+	PortalsTable = "portals"
+	// PortalsInverseTable is the table name for the Portal entity.
+	// It exists in this package in order to avoid circular dependency with the "portal" package.
+	PortalsInverseTable = "portals"
+	// PortalsColumn is the table column denoting the portals relation/edge.
+	PortalsColumn = "shell_portals"
 	// ActiveUsersTable is the table that holds the active_users relation/edge. The primary key declared below.
 	ActiveUsersTable = "shell_active_users"
 	// ActiveUsersInverseTable is the table name for the User entity.
 	// It exists in this package in order to avoid circular dependency with the "user" package.
 	ActiveUsersInverseTable = "users"
+	// ShellTasksTable is the table that holds the shell_tasks relation/edge.
+	ShellTasksTable = "shell_tasks"
+	// ShellTasksInverseTable is the table name for the ShellTask entity.
+	// It exists in this package in order to avoid circular dependency with the "shelltask" package.
+	ShellTasksInverseTable = "shell_tasks"
+	// ShellTasksColumn is the table column denoting the shell_tasks relation/edge.
+	ShellTasksColumn = "shell_shell_tasks"
+	// PivotsTable is the table that holds the pivots relation/edge.
+	PivotsTable = "shell_pivots"
+	// PivotsInverseTable is the table name for the ShellPivot entity.
+	// It exists in this package in order to avoid circular dependency with the "shellpivot" package.
+	PivotsInverseTable = "shell_pivots"
+	// PivotsColumn is the table column denoting the pivots relation/edge.
+	PivotsColumn = "shell_pivot_shell"
 )
 
 // Columns holds all SQL columns for shell fields.
@@ -151,6 +178,20 @@ func ByOwnerField(field string, opts ...sql.OrderTermOption) OrderOption {
 	}
 }
 
+// ByPortalsCount orders the results by portals count.
+func ByPortalsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newPortalsStep(), opts...)
+	}
+}
+
+// ByPortals orders the results by portals terms.
+func ByPortals(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newPortalsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByActiveUsersCount orders the results by active_users count.
 func ByActiveUsersCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -162,6 +203,34 @@ func ByActiveUsersCount(opts ...sql.OrderTermOption) OrderOption {
 func ByActiveUsers(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	return func(s *sql.Selector) {
 		sqlgraph.OrderByNeighborTerms(s, newActiveUsersStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// ByShellTasksCount orders the results by shell_tasks count.
+func ByShellTasksCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newShellTasksStep(), opts...)
+	}
+}
+
+// ByShellTasks orders the results by shell_tasks terms.
+func ByShellTasks(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newShellTasksStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// ByPivotsCount orders the results by pivots count.
+func ByPivotsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newPivotsStep(), opts...)
+	}
+}
+
+// ByPivots orders the results by pivots terms.
+func ByPivots(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newPivotsStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
 func newTaskStep() *sqlgraph.Step {
@@ -185,10 +254,31 @@ func newOwnerStep() *sqlgraph.Step {
 		sqlgraph.Edge(sqlgraph.M2O, false, OwnerTable, OwnerColumn),
 	)
 }
+func newPortalsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(PortalsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, PortalsTable, PortalsColumn),
+	)
+}
 func newActiveUsersStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(ActiveUsersInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2M, false, ActiveUsersTable, ActiveUsersPrimaryKey...),
+	)
+}
+func newShellTasksStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(ShellTasksInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, ShellTasksTable, ShellTasksColumn),
+	)
+}
+func newPivotsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(PivotsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, true, PivotsTable, PivotsColumn),
 	)
 }

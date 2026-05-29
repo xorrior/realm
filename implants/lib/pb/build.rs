@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use which::which;
@@ -10,9 +9,12 @@ struct TransportConfig {
     uri: String,
     #[serde(rename = "type")]
     transport_type: String,
+    #[serde(default)]
     extra: String,
     #[serde(default)]
     interval: Option<u64>,
+    #[serde(default)]
+    jitter: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,9 +88,11 @@ fn parse_yaml_config() -> Result<Option<YamlConfigResult>, Box<dyn std::error::E
     for transport in &config.transports {
         // Validate transport type
         let transport_type_lower = transport.transport_type.to_lowercase();
-        if !["grpc", "http1", "dns"].contains(&transport_type_lower.as_str()) {
+        if !["grpc", "http1", "dns", "icmp", "tcp_bind", "quic"]
+            .contains(&transport_type_lower.as_str())
+        {
             return Err(format!(
-                "Invalid transport type '{}'. Must be one of: GRPC, http1, DNS",
+                "Invalid transport type '{}'. Must be one of: GRPC, http1, DNS, tcp_bind, quic",
                 transport.transport_type
             )
             .into());
@@ -120,6 +124,14 @@ fn parse_yaml_config() -> Result<Option<YamlConfigResult>, Box<dyn std::error::E
         if let Some(interval) = transport.interval {
             params.push(format!("interval={}", interval));
         }
+
+        // Add jitter if present
+        if let Some(jitter) = transport.jitter {
+            params.push(format!("jitter={}", jitter));
+        }
+
+        // Add type query parameter
+        params.push(format!("type={}", transport_type_lower));
 
         // Add extra as query parameter if not empty
         if !transport.extra.is_empty() {
@@ -198,8 +210,15 @@ fn get_pub_key(yaml_config: Option<YamlConfigResult>) {
     // Construct the status endpoint URL
     let status_url = format!("{}/status", base_uri);
 
-    // Make a GET request to /status
-    let response = match reqwest::blocking::get(&status_url) {
+    // Make a GET request to /status using HTTP/1.1 to ensure unencrypted requests work
+    let client = match reqwest::blocking::Client::builder().http1_only().build() {
+        Ok(c) => c,
+        Err(e) => {
+            println!("cargo:warning=Failed to build HTTP client: {}", e);
+            return;
+        }
+    };
+    let response = match client.get(&status_url).send() {
         Ok(resp) => resp,
         Err(e) => {
             println!("cargo:warning=Failed to connect to {}: {}", status_url, e);
@@ -291,6 +310,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-env-changed=IMIX_CALLBACK_INTERVAL");
     println!("cargo:rerun-if-env-changed=IMIX_SERVER_PUBKEY");
     println!("cargo:rerun-if-env-changed=PROTOC");
+    println!("cargo:rerun-if-env-changed=IMIX_DEBUG");
+    let profile = std::env::var("PROFILE").unwrap_or_default();
+    let imix_debug = std::env::var("IMIX_DEBUG").unwrap_or_default();
+
+    if profile == "debug" || imix_debug == "tomes" || imix_debug == "all" {
+        println!("cargo:rustc-cfg=feature=\"print_debug_tome\"");
+    }
+
+    if profile == "debug" || imix_debug == "all" {
+        println!("cargo:rustc-cfg=feature=\"print_debug\"");
+    }
 
     // Parse YAML config if present (this will emit IMIX_CALLBACK_URI if successful)
     let yaml_config = parse_yaml_config()?;
@@ -313,12 +343,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Build Eldritch Proto
-    match tonic_build::configure()
+    match tonic_prost_build::configure()
         .out_dir("./src/generated/")
         .codec_path("crate::xchacha::ChachaCodec")
         .build_client(false)
         .build_server(false)
-        .compile(
+        .compile_protos(
             &["eldritch.proto"],
             &[
                 "../../../tavern/internal/c2/proto/",
@@ -333,12 +363,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Build Portal Protos
-    match tonic_build::configure()
+    match tonic_prost_build::configure()
         .out_dir("./src/generated/")
         .codec_path("crate::xchacha::ChachaCodec")
         .build_client(false)
         .build_server(false)
-        .compile(
+        .compile_protos(
             &["portal.proto"],
             &[
                 "../../../tavern/internal/c2/proto/",
@@ -351,12 +381,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Ok(_) => println!("generated portal protos"),
     };
-    match tonic_build::configure()
+    match tonic_prost_build::configure()
         .out_dir("./src/generated/")
         .codec_path("crate::xchacha::ChachaCodec")
         .build_client(false)
         .build_server(false)
-        .compile(&["trace.proto"], &["../../../tavern/portals/proto/"])
+        .compile_protos(&["trace.proto"], &["../../../tavern/portals/proto/"])
     {
         Err(err) => {
             println!("WARNING: Failed to compile portal protos: {}", err);
@@ -366,12 +396,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Build C2 Protos
-    match tonic_build::configure()
+    match tonic_prost_build::configure()
         .out_dir("./src/generated")
         .codec_path("crate::xchacha::ChachaCodec")
         .build_server(false)
         .extern_path(".eldritch", "crate::eldritch")
-        .compile(
+        .compile_protos(
             &["c2.proto"],
             &[
                 "../../../tavern/internal/c2/proto/",
@@ -385,23 +415,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_) => println!("generated c2 protos"),
     };
 
-    // Build DNS Protos (no encryption codec - used for transport layer only)
-    match tonic_build::configure()
+    // Build Conv Protos (no encryption codec - shared conversation protocol)
+    match tonic_prost_build::configure()
         .out_dir("./src/generated")
         .build_server(false)
         .build_client(false)
-        .compile(
-            &["dns.proto"],
+        .compile_protos(
+            &["conv.proto"],
             &[
                 "../../../tavern/internal/c2/proto/",
                 "../../../tavern/portals/proto/",
             ],
         ) {
         Err(err) => {
-            println!("WARNING: Failed to compile dns protos: {}", err);
+            println!("WARNING: Failed to compile conv protos: {}", err);
             panic!("{}", err);
         }
-        Ok(_) => println!("generated dns protos"),
+        Ok(_) => println!("generated conv protos"),
     };
 
     Ok(())

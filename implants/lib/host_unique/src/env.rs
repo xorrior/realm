@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::HostIDSelector;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Env {}
 
 impl HostIDSelector for Env {
@@ -15,7 +15,7 @@ impl HostIDSelector for Env {
         let host_id_env = match env::var("IMIX_HOST_ID") {
             Ok(res) => res,
             Err(_err) => {
-                #[cfg(debug_assertions)]
+                #[cfg(feature = "print_debug")]
                 log::debug!("No environment variable set {:?}", _err);
                 return None;
             }
@@ -23,7 +23,7 @@ impl HostIDSelector for Env {
         match Uuid::parse_str(&host_id_env) {
             Ok(res) => Some(res),
             Err(_err) => {
-                #[cfg(debug_assertions)]
+                #[cfg(feature = "print_debug")]
                 log::debug!("Failed to deploy {:?}", _err);
                 None
             }

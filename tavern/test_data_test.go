@@ -15,10 +15,8 @@ import (
 func TestCreateTestData(t *testing.T) {
 	var (
 		ctx            = context.Background()
-		driverName     = "sqlite3"
-		dataSourceName = "file:test-create-test-data?mode=memory&cache=shared&_fk=1"
 	)
-	graph := enttest.Open(t, driverName, dataSourceName, enttest.WithOptions())
+	graph := enttest.OpenTempDB(t)
 	defer graph.Close()
 
 	createTestData(ctx, graph)
@@ -41,5 +39,18 @@ func TestCreateTestData(t *testing.T) {
 		require.Greater(t, len(paramDefs), 0)
 		assert.NotEmpty(t, paramDefs[0].Name)
 
+	})
+
+	t.Run("ProcessListTest", func(t *testing.T) {
+		count := graph.HostProcess.Query().CountX(ctx)
+		// We expect 12 hosts (3 groups * 4 platforms) to have processes.
+		// Each platform has a specific number of processes.
+		// Windows: 11
+		// Linux: 10
+		// MacOS: 8
+		// BSD: 7
+		// Total per group: 11 + 10 + 8 + 7 = 36
+		// Total for 3 groups: 36 * 3 = 108
+		assert.Equal(t, 108, count)
 	})
 }

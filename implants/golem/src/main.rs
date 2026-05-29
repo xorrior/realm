@@ -8,7 +8,11 @@ use eldritch::assets::{
     std::{EmbeddedAssets, StdAssetsLibrary},
 };
 use eldritch::conversion::ToValue;
+#[cfg(not(feature = "print_debug_tome"))]
+use eldritch::{ForeignValue, Interpreter, NoopPrinter};
+#[cfg(feature = "print_debug_tome")]
 use eldritch::{ForeignValue, Interpreter, StdoutPrinter};
+use eldritch_agent::Context;
 use pb::c2::TaskContext;
 use std::collections::BTreeMap;
 use std::fs;
@@ -38,20 +42,23 @@ pub struct ParsedTome {
 // Build a new runtime
 fn new_runtime(assetlib: impl ForeignValue + 'static) -> Interpreter {
     // Maybe change the printer here?
-    let mut interp = Interpreter::new_with_printer(Arc::new(StdoutPrinter)).with_default_libs();
     // Register the libraries that we need. Basically the same as interp.with_task_context but
     // with our custom assets library
     let agent = Arc::new(AgentFake {});
+    #[cfg(feature = "print_debug_tome")]
+    let mut interp = Interpreter::new_with_printer(Arc::new(StdoutPrinter)).with_default_libs();
+    #[cfg(not(feature = "print_debug_tome"))]
+    let mut interp = Interpreter::new_with_printer(Arc::new(NoopPrinter)).with_default_libs();
     let task_context = TaskContext {
         task_id: 0,
         jwt: String::new(),
     };
-    let agent_lib = StdAgentLibrary::new(agent.clone(), task_context.clone());
+    let context = Context::Task(task_context);
+    let agent_lib = StdAgentLibrary::new(agent.clone(), context.clone());
     interp.register_lib(agent_lib);
-    let report_lib =
-        eldritch::report::std::StdReportLibrary::new(agent.clone(), task_context.clone());
+    let report_lib = eldritch::report::std::StdReportLibrary::new(agent.clone(), context.clone());
     interp.register_lib(report_lib);
-    let pivot_lib = eldritch::pivot::std::StdPivotLibrary::new(agent.clone(), task_context.clone());
+    let pivot_lib = eldritch::pivot::std::StdPivotLibrary::new(agent.clone(), context.clone());
     interp.register_lib(pivot_lib);
     interp.register_lib(assetlib);
     interp

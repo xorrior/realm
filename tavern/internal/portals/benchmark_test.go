@@ -42,7 +42,7 @@ func newBufListener(sz int) *bufListener {
 
 func BenchmarkPortalThroughput(b *testing.B) {
 	// 1. Setup DB
-	client := enttest.Open(b, "sqlite3", "file:ent?mode=memory&cache=shared&_fk=1")
+	client := enttest.OpenTempDB(b)
 	defer client.Close()
 
 	ctx := context.Background()
@@ -140,7 +140,12 @@ func BenchmarkPortalThroughput(b *testing.B) {
 
 	// Send initial request with TaskID
 	err = agentStream.Send(&c2pb.CreatePortalRequest{
-		Context: &c2pb.TaskContext{TaskId: int64(taskEnt.ID)},
+		Context: &c2pb.CreatePortalRequest_TaskContext{
+			TaskContext: &c2pb.TaskContext{
+				TaskId: int64(taskEnt.ID),
+				Jwt:    generateJWT(b, testPrivKey),
+			},
+		},
 	})
 	require.NoError(b, err)
 

@@ -36,6 +36,10 @@ pub trait SysLibrary {
     ///
     /// **Errors**
     /// - Returns an error string if injection fails.
+    ///
+    /// **Note**
+    /// - For Imix reflective loading, use `dll_reflect` with `function_name = "lib_entry"` instead of
+    ///   loading from disk with `dll_inject`.
     fn dll_inject(&self, dll_path: String, pid: i64) -> Result<(), String>;
 
     #[eldritch_method]
@@ -44,7 +48,7 @@ pub trait SysLibrary {
     /// **Parameters**
     /// - `dll_bytes` (`List<int>`): Content of the DLL.
     /// - `pid` (`int`): Target process ID.
-    /// - `function_name` (`str`): Exported function to call.
+    /// - `function_name` (`str`): Exported function to call (for Imix DLLs, use `"lib_entry"`).
     ///
     /// **Returns**
     /// - `None`
@@ -110,13 +114,11 @@ pub trait SysLibrary {
     /// Reads values from the Windows Registry.
     ///
     /// **Parameters**
-    /// - `reghive` (`str`): The registry hive (e.g., "HKEY_LOCAL_MACHINE").
-    /// - `regpath` (`str`): The registry path.
+    /// - `path` (`str`): The registry path (e.g., "HKEY_LOCAL_MACHINE\\SOFTWARE" or "HKLM\\SOFTWARE").
     ///
     /// **Returns**
     /// - `Dict<str, str>`: A dictionary of registry keys and values.
-    fn get_reg(&self, reghive: String, regpath: String)
-    -> Result<BTreeMap<String, String>, String>;
+    fn get_reg(&self, path: String) -> Result<BTreeMap<String, String>, String>;
 
     #[eldritch_method]
     /// Returns information about the current user.
@@ -161,6 +163,13 @@ pub trait SysLibrary {
     fn is_windows(&self) -> Result<bool, String>;
 
     #[eldritch_method]
+    /// Lists all user accounts on the system.
+    ///
+    /// **Returns**
+    /// - `List<Dict>`: List of user accounts.
+    fn list_users(&self) -> Result<Vec<BTreeMap<String, Value>>, String>;
+
+    #[eldritch_method]
     /// Executes a command via the system shell (`/bin/sh` or `cmd.exe`).
     ///
     /// **Parameters**
@@ -171,65 +180,21 @@ pub trait SysLibrary {
     fn shell(&self, cmd: String) -> Result<BTreeMap<String, Value>, String>;
 
     #[eldritch_method]
-    /// Writes a hex value to the Windows Registry.
+    /// Writes a value to the Windows Registry.
     ///
     /// **Parameters**
-    /// - `reghive` (`str`)
-    /// - `regpath` (`str`)
+    /// - `path` (`str`): The registry path (e.g., "HKEY_LOCAL_MACHINE\\SOFTWARE" or "HKLM\\SOFTWARE").
     /// - `regname` (`str`)
-    /// - `regtype` (`str`): e.g., "REG_BINARY".
-    /// - `regvalue` (`str`): Hex string.
+    /// - `regtype` (`str`): e.g., "REG_SZ", "REG_DWORD", "REG_BINARY".
+    /// - `regvalue` (`any`): The value to write.
     ///
     /// **Returns**
     /// - `bool`: True on success.
-    fn write_reg_hex(
+    fn write_reg(
         &self,
-        reghive: String,
-        regpath: String,
+        path: String,
         regname: String,
         regtype: String,
-        regvalue: String,
-    ) -> Result<bool, String>;
-
-    #[eldritch_method]
-    /// Writes an integer value to the Windows Registry.
-    ///
-    /// **Parameters**
-    /// - `reghive` (`str`)
-    /// - `regpath` (`str`)
-    /// - `regname` (`str`)
-    /// - `regtype` (`str`): e.g., "REG_DWORD".
-    /// - `regvalue` (`int`)
-    ///
-    /// **Returns**
-    /// - `bool`: True on success.
-    fn write_reg_int(
-        &self,
-        reghive: String,
-        regpath: String,
-        regname: String,
-        regtype: String,
-        regvalue: i64,
-    ) -> Result<bool, String>;
-
-    #[eldritch_method]
-    /// Writes a string value to the Windows Registry.
-    ///
-    /// **Parameters**
-    /// - `reghive` (`str`)
-    /// - `regpath` (`str`)
-    /// - `regname` (`str`)
-    /// - `regtype` (`str`): e.g., "REG_SZ".
-    /// - `regvalue` (`str`)
-    ///
-    /// **Returns**
-    /// - `bool`: True on success.
-    fn write_reg_str(
-        &self,
-        reghive: String,
-        regpath: String,
-        regname: String,
-        regtype: String,
-        regvalue: String,
+        regvalue: Value,
     ) -> Result<bool, String>;
 }

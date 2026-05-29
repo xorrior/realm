@@ -12,6 +12,7 @@ enum BytesPayloadKind {
     BYTES_PAYLOAD_KIND_KEEPALIVE = 3;
     BYTES_PAYLOAD_KIND_TRACE = 4;
     BYTES_PAYLOAD_KIND_CLOSE = 5;
+    BYTES_PAYLOAD_KIND_PTY = 6;
 }
 message BytesPayload {
     bytes data = 1;
@@ -27,6 +28,12 @@ message UDPPayload {
     string dst_addr = 2;
     uint32 dst_port = 3;
 }
+message ShellPayload {
+    string input = 1;
+    int64 shell_id = 2;
+    string output = 3;
+    string error = 4;
+}
 
 message Mote {
     // Unique identifier used to route reply traffic back to original port
@@ -40,6 +47,7 @@ message Mote {
         UDPPayload udp = 3;
         TCPPayload tcp = 4;
         BytesPayload bytes = 5;
+        ShellPayload shell = 6;
     }
 }
 

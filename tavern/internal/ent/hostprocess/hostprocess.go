@@ -39,10 +39,14 @@ const (
 	FieldCwd = "cwd"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
+	// FieldStartTime holds the string denoting the start_time field in the database.
+	FieldStartTime = "start_time"
 	// EdgeHost holds the string denoting the host edge name in mutations.
 	EdgeHost = "host"
 	// EdgeTask holds the string denoting the task edge name in mutations.
 	EdgeTask = "task"
+	// EdgeShellTask holds the string denoting the shell_task edge name in mutations.
+	EdgeShellTask = "shell_task"
 	// Table holds the table name of the hostprocess in the database.
 	Table = "host_processes"
 	// HostTable is the table that holds the host relation/edge.
@@ -59,6 +63,13 @@ const (
 	TaskInverseTable = "tasks"
 	// TaskColumn is the table column denoting the task relation/edge.
 	TaskColumn = "task_reported_processes"
+	// ShellTaskTable is the table that holds the shell_task relation/edge.
+	ShellTaskTable = "host_processes"
+	// ShellTaskInverseTable is the table name for the ShellTask entity.
+	// It exists in this package in order to avoid circular dependency with the "shelltask" package.
+	ShellTaskInverseTable = "shell_tasks"
+	// ShellTaskColumn is the table column denoting the shell_task relation/edge.
+	ShellTaskColumn = "shell_task_reported_processes"
 )
 
 // Columns holds all SQL columns for hostprocess fields.
@@ -75,6 +86,7 @@ var Columns = []string{
 	FieldEnv,
 	FieldCwd,
 	FieldStatus,
+	FieldStartTime,
 }
 
 // ForeignKeys holds the SQL foreign-keys that are owned by the "host_processes"
@@ -82,6 +94,7 @@ var Columns = []string{
 var ForeignKeys = []string{
 	"host_processes",
 	"host_process_host",
+	"shell_task_reported_processes",
 	"task_reported_processes",
 }
 
@@ -107,8 +120,6 @@ var (
 	DefaultLastModifiedAt func() time.Time
 	// UpdateDefaultLastModifiedAt holds the default value on update for the "last_modified_at" field.
 	UpdateDefaultLastModifiedAt func() time.Time
-	// PrincipalValidator is a validator for the "principal" field. It is called by the builders before save.
-	PrincipalValidator func(string) error
 )
 
 // StatusValidator is a validator for the "status" field enum values. It is called by the builders before save.
@@ -184,6 +195,11 @@ func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStatus, opts...).ToFunc()
 }
 
+// ByStartTime orders the results by the start_time field.
+func ByStartTime(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldStartTime, opts...).ToFunc()
+}
+
 // ByHostField orders the results by host field.
 func ByHostField(field string, opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -195,6 +211,13 @@ func ByHostField(field string, opts ...sql.OrderTermOption) OrderOption {
 func ByTaskField(field string, opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
 		sqlgraph.OrderByNeighborTerms(s, newTaskStep(), sql.OrderByField(field, opts...))
+	}
+}
+
+// ByShellTaskField orders the results by shell_task field.
+func ByShellTaskField(field string, opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newShellTaskStep(), sql.OrderByField(field, opts...))
 	}
 }
 func newHostStep() *sqlgraph.Step {
@@ -209,6 +232,13 @@ func newTaskStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(TaskInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, TaskTable, TaskColumn),
+	)
+}
+func newShellTaskStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(ShellTaskInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.M2O, true, ShellTaskTable, ShellTaskColumn),
 	)
 }
 

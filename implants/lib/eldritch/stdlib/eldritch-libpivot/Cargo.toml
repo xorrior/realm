@@ -1,12 +1,12 @@
 [package]
 name = "eldritch-libpivot"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
 eldritch-core = { workspace = true }
 eldritch-macros = { workspace = true }
-eldritch-agent = { workspace = true }
+eldritch-agent = { workspace = true, optional = true }
 
 anyhow = { workspace = true, optional = true }
 async-recursion = { workspace = true, optional = true }
@@ -22,18 +22,21 @@ tokio = { workspace = true, features = [
     "fs",
 ], optional = true }
 pnet = { workspace = true, optional = true }
-pb = { workspace = true }
+pb = { workspace = true, optional = true }
 
 [target.'cfg(not(target_os = "freebsd"))'.dependencies]
 listeners = { workspace = true, optional = true }
 
 [dev-dependencies]
+eldritch-mockagent = { path = "../../testutils/eldritch-mockagent" }
 tempfile = { workspace = true }
 eldritch-agent = { workspace = true }
 
 [features]
 default = ["stdlib"]
 stdlib = [
+    "dep:eldritch-agent",
+    "dep:pb",
     "anyhow",
     "async-recursion",
     "async-trait",
@@ -46,3 +49,4 @@ stdlib = [
     "pnet",
 ]
 fake_bindings = []
+print_debug = []

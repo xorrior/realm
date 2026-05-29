@@ -10,14 +10,12 @@ type TagContextType = {
     data: TagContextProps;
     isLoading: boolean;
     error: ApolloError | undefined;
-    lastFetchedTimestamp: Date;
 };
 
 export const TagContext = createContext<TagContextType | undefined>(undefined);
 
 export const TagContextProvider = ({ children }: { children: React.ReactNode }) => {
-    const [lastFetchedTimestamp, setLastFetchedTimestamp] = useState<Date>(new Date());
-
+    const [isLoading, setIsLoading] = useState(true);
     const [tags, setTags] = useState<TagContextProps>({
         beacons: [],
         groupTags: [],
@@ -25,19 +23,21 @@ export const TagContextProvider = ({ children }: { children: React.ReactNode }) 
         hosts: [],
         principals: [],
         primaryIPs: [],
+        externalIPs: [],
         platforms: [],
         transports: [],
         onlineOfflineStatus: [],
     });
 
-    const PARAMS = {
-        variables: {
-            groupTag: { kind: "group" },
-            serviceTag: { kind: "service" },
+    const { error, data} = useQuery(GET_TAG_FILTERS, 
+        {
+            variables: {
+                groupTag: { kind: "group" },
+                serviceTag: { kind: "service" },
+            },
+            fetchPolicy: "network-only",
         }
-    }
-
-    const { loading: isLoading, error, data } = useQuery(GET_TAG_FILTERS, PARAMS);
+    );
 
 
     const getTags = useCallback((data: TagContextQueryResponse) => {
@@ -73,6 +73,8 @@ export const TagContextProvider = ({ children }: { children: React.ReactNode }) 
         const hosts: Array<FilterBarOption & HostNode> = [];
         const primaryIPsSet = new Set<string>();
         const primaryIPs: FilterBarOption[] = [];
+        const externalIPsSet = new Set<string>();
+        const externalIPs: FilterBarOption[] = [];
         data?.hosts?.edges?.forEach((edge: HostEdge) => {
             const node = edge.node;
             hosts.push({
@@ -89,6 +91,16 @@ export const TagContextProvider = ({ children }: { children: React.ReactNode }) 
                     value: node.primaryIP,
                     label: node.primaryIP,
                     kind: "primaryIP"
+                });
+            }
+            if (node.externalIP && !externalIPsSet.has(node.externalIP)) {
+                externalIPsSet.add(node.externalIP);
+                externalIPs.push({
+                    id: node.externalIP,
+                    name: node.externalIP,
+                    value: node.externalIP,
+                    label: node.externalIP,
+                    kind: "externalIP"
                 });
             }
         });
@@ -141,23 +153,24 @@ export const TagContextProvider = ({ children }: { children: React.ReactNode }) 
             hosts,
             principals,
             primaryIPs,
+            externalIPs,
             platforms,
             transports,
             onlineOfflineStatus: OnlineOfflineOptions
         };
+        setIsLoading(false);
         setTags(tags);
     }, []);
 
     useEffect(() => {
         if (data) {
             getTags(data)
-            setLastFetchedTimestamp(new Date());
         }
     }, [data, getTags])
 
 
     return (
-        <TagContext.Provider value={{ data: tags, isLoading, error, lastFetchedTimestamp }}>
+        <TagContext.Provider value={{ data: tags, isLoading, error }}>
             {children}
         </TagContext.Provider>
     );

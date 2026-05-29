@@ -14,6 +14,7 @@ import (
 	"realm.pub/tavern/internal/c2/epb"
 	"realm.pub/tavern/internal/ent/host"
 	"realm.pub/tavern/internal/ent/hostprocess"
+	"realm.pub/tavern/internal/ent/shelltask"
 	"realm.pub/tavern/internal/ent/task"
 )
 
@@ -74,6 +75,14 @@ func (hpc *HostProcessCreate) SetName(s string) *HostProcessCreate {
 // SetPrincipal sets the "principal" field.
 func (hpc *HostProcessCreate) SetPrincipal(s string) *HostProcessCreate {
 	hpc.mutation.SetPrincipal(s)
+	return hpc
+}
+
+// SetNillablePrincipal sets the "principal" field if the given value is not nil.
+func (hpc *HostProcessCreate) SetNillablePrincipal(s *string) *HostProcessCreate {
+	if s != nil {
+		hpc.SetPrincipal(*s)
+	}
 	return hpc
 }
 
@@ -139,6 +148,20 @@ func (hpc *HostProcessCreate) SetStatus(es epb.Process_Status) *HostProcessCreat
 	return hpc
 }
 
+// SetStartTime sets the "start_time" field.
+func (hpc *HostProcessCreate) SetStartTime(u uint64) *HostProcessCreate {
+	hpc.mutation.SetStartTime(u)
+	return hpc
+}
+
+// SetNillableStartTime sets the "start_time" field if the given value is not nil.
+func (hpc *HostProcessCreate) SetNillableStartTime(u *uint64) *HostProcessCreate {
+	if u != nil {
+		hpc.SetStartTime(*u)
+	}
+	return hpc
+}
+
 // SetHostID sets the "host" edge to the Host entity by ID.
 func (hpc *HostProcessCreate) SetHostID(id int) *HostProcessCreate {
 	hpc.mutation.SetHostID(id)
@@ -156,9 +179,36 @@ func (hpc *HostProcessCreate) SetTaskID(id int) *HostProcessCreate {
 	return hpc
 }
 
+// SetNillableTaskID sets the "task" edge to the Task entity by ID if the given value is not nil.
+func (hpc *HostProcessCreate) SetNillableTaskID(id *int) *HostProcessCreate {
+	if id != nil {
+		hpc = hpc.SetTaskID(*id)
+	}
+	return hpc
+}
+
 // SetTask sets the "task" edge to the Task entity.
 func (hpc *HostProcessCreate) SetTask(t *Task) *HostProcessCreate {
 	return hpc.SetTaskID(t.ID)
+}
+
+// SetShellTaskID sets the "shell_task" edge to the ShellTask entity by ID.
+func (hpc *HostProcessCreate) SetShellTaskID(id int) *HostProcessCreate {
+	hpc.mutation.SetShellTaskID(id)
+	return hpc
+}
+
+// SetNillableShellTaskID sets the "shell_task" edge to the ShellTask entity by ID if the given value is not nil.
+func (hpc *HostProcessCreate) SetNillableShellTaskID(id *int) *HostProcessCreate {
+	if id != nil {
+		hpc = hpc.SetShellTaskID(*id)
+	}
+	return hpc
+}
+
+// SetShellTask sets the "shell_task" edge to the ShellTask entity.
+func (hpc *HostProcessCreate) SetShellTask(s *ShellTask) *HostProcessCreate {
+	return hpc.SetShellTaskID(s.ID)
 }
 
 // Mutation returns the HostProcessMutation object of the builder.
@@ -223,14 +273,6 @@ func (hpc *HostProcessCreate) check() error {
 	if _, ok := hpc.mutation.Name(); !ok {
 		return &ValidationError{Name: "name", err: errors.New(`ent: missing required field "HostProcess.name"`)}
 	}
-	if _, ok := hpc.mutation.Principal(); !ok {
-		return &ValidationError{Name: "principal", err: errors.New(`ent: missing required field "HostProcess.principal"`)}
-	}
-	if v, ok := hpc.mutation.Principal(); ok {
-		if err := hostprocess.PrincipalValidator(v); err != nil {
-			return &ValidationError{Name: "principal", err: fmt.Errorf(`ent: validator failed for field "HostProcess.principal": %w`, err)}
-		}
-	}
 	if _, ok := hpc.mutation.Status(); !ok {
 		return &ValidationError{Name: "status", err: errors.New(`ent: missing required field "HostProcess.status"`)}
 	}
@@ -241,9 +283,6 @@ func (hpc *HostProcessCreate) check() error {
 	}
 	if len(hpc.mutation.HostIDs()) == 0 {
 		return &ValidationError{Name: "host", err: errors.New(`ent: missing required edge "HostProcess.host"`)}
-	}
-	if len(hpc.mutation.TaskIDs()) == 0 {
-		return &ValidationError{Name: "task", err: errors.New(`ent: missing required edge "HostProcess.task"`)}
 	}
 	return nil
 }
@@ -316,6 +355,10 @@ func (hpc *HostProcessCreate) createSpec() (*HostProcess, *sqlgraph.CreateSpec) 
 		_spec.SetField(hostprocess.FieldStatus, field.TypeEnum, value)
 		_node.Status = value
 	}
+	if value, ok := hpc.mutation.StartTime(); ok {
+		_spec.SetField(hostprocess.FieldStartTime, field.TypeUint64, value)
+		_node.StartTime = value
+	}
 	if nodes := hpc.mutation.HostIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.M2O,
@@ -348,6 +391,23 @@ func (hpc *HostProcessCreate) createSpec() (*HostProcess, *sqlgraph.CreateSpec) 
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.task_reported_processes = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := hpc.mutation.ShellTaskIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   hostprocess.ShellTaskTable,
+			Columns: []string{hostprocess.ShellTaskColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shelltask.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.shell_task_reported_processes = &nodes[0]
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	return _node, _spec
@@ -474,6 +534,12 @@ func (u *HostProcessUpsert) UpdatePrincipal() *HostProcessUpsert {
 	return u
 }
 
+// ClearPrincipal clears the value of the "principal" field.
+func (u *HostProcessUpsert) ClearPrincipal() *HostProcessUpsert {
+	u.SetNull(hostprocess.FieldPrincipal)
+	return u
+}
+
 // SetPath sets the "path" field.
 func (u *HostProcessUpsert) SetPath(v string) *HostProcessUpsert {
 	u.Set(hostprocess.FieldPath, v)
@@ -555,6 +621,30 @@ func (u *HostProcessUpsert) SetStatus(v epb.Process_Status) *HostProcessUpsert {
 // UpdateStatus sets the "status" field to the value that was provided on create.
 func (u *HostProcessUpsert) UpdateStatus() *HostProcessUpsert {
 	u.SetExcluded(hostprocess.FieldStatus)
+	return u
+}
+
+// SetStartTime sets the "start_time" field.
+func (u *HostProcessUpsert) SetStartTime(v uint64) *HostProcessUpsert {
+	u.Set(hostprocess.FieldStartTime, v)
+	return u
+}
+
+// UpdateStartTime sets the "start_time" field to the value that was provided on create.
+func (u *HostProcessUpsert) UpdateStartTime() *HostProcessUpsert {
+	u.SetExcluded(hostprocess.FieldStartTime)
+	return u
+}
+
+// AddStartTime adds v to the "start_time" field.
+func (u *HostProcessUpsert) AddStartTime(v uint64) *HostProcessUpsert {
+	u.Add(hostprocess.FieldStartTime, v)
+	return u
+}
+
+// ClearStartTime clears the value of the "start_time" field.
+func (u *HostProcessUpsert) ClearStartTime() *HostProcessUpsert {
+	u.SetNull(hostprocess.FieldStartTime)
 	return u
 }
 
@@ -687,6 +777,13 @@ func (u *HostProcessUpsertOne) UpdatePrincipal() *HostProcessUpsertOne {
 	})
 }
 
+// ClearPrincipal clears the value of the "principal" field.
+func (u *HostProcessUpsertOne) ClearPrincipal() *HostProcessUpsertOne {
+	return u.Update(func(s *HostProcessUpsert) {
+		s.ClearPrincipal()
+	})
+}
+
 // SetPath sets the "path" field.
 func (u *HostProcessUpsertOne) SetPath(v string) *HostProcessUpsertOne {
 	return u.Update(func(s *HostProcessUpsert) {
@@ -782,6 +879,34 @@ func (u *HostProcessUpsertOne) SetStatus(v epb.Process_Status) *HostProcessUpser
 func (u *HostProcessUpsertOne) UpdateStatus() *HostProcessUpsertOne {
 	return u.Update(func(s *HostProcessUpsert) {
 		s.UpdateStatus()
+	})
+}
+
+// SetStartTime sets the "start_time" field.
+func (u *HostProcessUpsertOne) SetStartTime(v uint64) *HostProcessUpsertOne {
+	return u.Update(func(s *HostProcessUpsert) {
+		s.SetStartTime(v)
+	})
+}
+
+// AddStartTime adds v to the "start_time" field.
+func (u *HostProcessUpsertOne) AddStartTime(v uint64) *HostProcessUpsertOne {
+	return u.Update(func(s *HostProcessUpsert) {
+		s.AddStartTime(v)
+	})
+}
+
+// UpdateStartTime sets the "start_time" field to the value that was provided on create.
+func (u *HostProcessUpsertOne) UpdateStartTime() *HostProcessUpsertOne {
+	return u.Update(func(s *HostProcessUpsert) {
+		s.UpdateStartTime()
+	})
+}
+
+// ClearStartTime clears the value of the "start_time" field.
+func (u *HostProcessUpsertOne) ClearStartTime() *HostProcessUpsertOne {
+	return u.Update(func(s *HostProcessUpsert) {
+		s.ClearStartTime()
 	})
 }
 
@@ -1080,6 +1205,13 @@ func (u *HostProcessUpsertBulk) UpdatePrincipal() *HostProcessUpsertBulk {
 	})
 }
 
+// ClearPrincipal clears the value of the "principal" field.
+func (u *HostProcessUpsertBulk) ClearPrincipal() *HostProcessUpsertBulk {
+	return u.Update(func(s *HostProcessUpsert) {
+		s.ClearPrincipal()
+	})
+}
+
 // SetPath sets the "path" field.
 func (u *HostProcessUpsertBulk) SetPath(v string) *HostProcessUpsertBulk {
 	return u.Update(func(s *HostProcessUpsert) {
@@ -1175,6 +1307,34 @@ func (u *HostProcessUpsertBulk) SetStatus(v epb.Process_Status) *HostProcessUpse
 func (u *HostProcessUpsertBulk) UpdateStatus() *HostProcessUpsertBulk {
 	return u.Update(func(s *HostProcessUpsert) {
 		s.UpdateStatus()
+	})
+}
+
+// SetStartTime sets the "start_time" field.
+func (u *HostProcessUpsertBulk) SetStartTime(v uint64) *HostProcessUpsertBulk {
+	return u.Update(func(s *HostProcessUpsert) {
+		s.SetStartTime(v)
+	})
+}
+
+// AddStartTime adds v to the "start_time" field.
+func (u *HostProcessUpsertBulk) AddStartTime(v uint64) *HostProcessUpsertBulk {
+	return u.Update(func(s *HostProcessUpsert) {
+		s.AddStartTime(v)
+	})
+}
+
+// UpdateStartTime sets the "start_time" field to the value that was provided on create.
+func (u *HostProcessUpsertBulk) UpdateStartTime() *HostProcessUpsertBulk {
+	return u.Update(func(s *HostProcessUpsert) {
+		s.UpdateStartTime()
+	})
+}
+
+// ClearStartTime clears the value of the "start_time" field.
+func (u *HostProcessUpsertBulk) ClearStartTime() *HostProcessUpsertBulk {
+	return u.Update(func(s *HostProcessUpsert) {
+		s.ClearStartTime()
 	})
 }
 

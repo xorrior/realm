@@ -6,12 +6,19 @@ import { useEditableTag } from "./useEditableTag";
 import { SingleValue } from "react-select";
 import { TagNode } from "../../../../utils/interfacesQuery";
 import { FilterBarOption, KindOfTag } from "../../../../utils/interfacesUI";
-import { useTags } from "../../../../context/TagContext";
+import { useTagOptions } from "./useTagOptions";
 
 
 export default function EditableTag({ kind, tagSaved, hostId }: { kind: KindOfTag, tagSaved?: TagNode, hostId?: string }) {
     const { data } = useAuthorization();
-    const { data: tagData } = useTags();
+    const { options, isLoading: optionsLoading } = useTagOptions(kind);
+
+    const customStyles = {
+        menu: (provided: any) => ({
+            ...provided,
+            zIndex: 20,
+        }),
+    };
 
     const canEdit = data?.me?.isAdmin || false;
     const {
@@ -22,16 +29,16 @@ export default function EditableTag({ kind, tagSaved, hostId }: { kind: KindOfTa
         handleCreateOption,
         setDisplayEditTag
     } = useEditableTag(kind);
-    const options = kind === "group" ? tagData.groupTags : tagData.serviceTags;
 
 
     if (displayEditTag) {
         return (
             <div className="ml-6">
                 <CreatableSelect
+                    styles={customStyles}
                     isClearable
-                    isDisabled={loading}
-                    isLoading={loading}
+                    isDisabled={loading || optionsLoading}
+                    isLoading={loading || optionsLoading}
                     onChange={(newValue: SingleValue<FilterBarOption>) => handleSelectOption(newValue, hostId, tagSaved)}
                     onCreateOption={(inputValue: string) => handleCreateOption(inputValue, hostId, tagSaved)}
                     options={options}

@@ -10,8 +10,9 @@ use crate::HostIDSelector;
 
 const UUID_SIZE: usize = 36;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct File {
+    #[serde(default)]
     path_override: Option<String>,
 }
 
@@ -68,7 +69,7 @@ impl HostIDSelector for File {
                 match f.read_exact(&mut host_id) {
                     Ok(_) => {}
                     Err(_err) => {
-                        #[cfg(debug_assertions)]
+                        #[cfg(feature = "print_debug")]
                         log::debug!("Failed to read host_id {:?}", _err);
                     }
                 }
@@ -76,7 +77,7 @@ impl HostIDSelector for File {
                     match Uuid::parse_str(uuid_str) {
                         Ok(res) => return Some(res),
                         Err(_err) => {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "print_debug")]
                             log::debug!("Failed to deploy {:?}", _err);
                         }
                     };
@@ -91,19 +92,21 @@ impl HostIDSelector for File {
         // Save to file
         match std::fs::File::create(path) {
             Ok(mut f) => match f.write(uuid_str.as_bytes()) {
-                Ok(_) => {}
+                Ok(_) => {
+                    return Some(host_id);
+                }
                 Err(_err) => {
-                    #[cfg(debug_assertions)]
+                    #[cfg(feature = "print_debug")]
                     log::debug!("failed to write host id file: {_err}");
                 }
             },
             Err(_err) => {
-                #[cfg(debug_assertions)]
+                #[cfg(feature = "print_debug")]
                 log::debug!("failed to create host id file: {_err}");
             }
         };
 
-        Some(host_id)
+        None
     }
 }
 

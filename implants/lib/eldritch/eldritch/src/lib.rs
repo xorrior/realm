@@ -8,7 +8,9 @@ extern crate std;
 // Re-exports from eldritch-stdlib
 pub use eldritch_libagent as agent;
 pub use eldritch_libassets as assets;
+pub use eldritch_libchain as chain;
 pub use eldritch_libcrypto as crypto;
+pub use eldritch_libdns as dns;
 pub use eldritch_libfile as file;
 pub use eldritch_libhttp as http;
 pub use eldritch_libpivot as pivot;
@@ -22,16 +24,17 @@ pub use eldritch_repl as repl;
 
 // Re-export core types
 pub use eldritch_core::{
-    BufferPrinter, Environment, ForeignValue, Interpreter as CoreInterpreter, Printer, Span,
-    StdoutPrinter, TokenKind, Value, conversion,
+    BufferPrinter, Environment, ForeignValue, Interpreter as CoreInterpreter, NoopPrinter, Printer,
+    Span, StdoutPrinter, TokenKind, Value, conversion, format_tprint, pretty_format,
 };
 pub use eldritch_macros as macros;
 
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+
 #[cfg(feature = "stdlib")]
-use pb::c2::TaskContext;
+use eldritch_agent::Context;
 
 #[cfg(feature = "stdlib")]
 pub use crate::agent::{agent::Agent, std::StdAgentLibrary};
@@ -46,7 +49,11 @@ pub use crate::assets::std::EmptyAssets;
 #[cfg(feature = "stdlib")]
 use crate::assets::std::StdAssetsLibrary;
 #[cfg(feature = "stdlib")]
+use crate::chain::std::StdChainLibrary;
+#[cfg(feature = "stdlib")]
 use crate::crypto::std::StdCryptoLibrary;
+#[cfg(feature = "stdlib")]
+use crate::dns::std::StdDnsLibrary;
 #[cfg(feature = "stdlib")]
 use crate::file::std::StdFileLibrary;
 #[cfg(feature = "stdlib")]
@@ -70,8 +77,12 @@ use crate::time::std::StdTimeLibrary;
 use crate::agent::fake::AgentLibraryFake;
 #[cfg(feature = "fake_assets")]
 use crate::assets::fake::FakeAssetsLibrary;
+#[cfg(feature = "fake_chain")]
+use crate::chain::fake::FakeChainLibrary;
 #[cfg(feature = "fake_crypto")]
 use crate::crypto::fake::CryptoLibraryFake;
+#[cfg(feature = "fake_dns")]
+use crate::dns::fake::DnsLibraryFake;
 #[cfg(feature = "fake_file")]
 use crate::file::fake::FileLibraryFake;
 #[cfg(feature = "fake_http")]
@@ -114,8 +125,8 @@ impl Interpreter {
         }
     }
 
+    #[cfg(feature = "stdlib")]
     pub fn with_default_libs(mut self) -> Self {
-        #[cfg(feature = "stdlib")]
         {
             self.inner.register_lib(StdCryptoLibrary);
             self.inner.register_lib(StdFileLibrary);
@@ -126,6 +137,7 @@ impl Interpreter {
             self.inner.register_lib(StdRegexLibrary);
             self.inner.register_lib(StdSysLibrary);
             self.inner.register_lib(StdTimeLibrary);
+            self.inner.register_lib(StdDnsLibrary);
         }
 
         #[cfg(feature = "fake_crypto")]
@@ -146,6 +158,8 @@ impl Interpreter {
         self.inner.register_lib(SysLibraryFake);
         #[cfg(feature = "fake_time")]
         self.inner.register_lib(TimeLibraryFake);
+        #[cfg(feature = "fake_dns")]
+        self.inner.register_lib(DnsLibraryFake::default());
 
         self
     }
@@ -160,19 +174,23 @@ impl Interpreter {
             task_id: 0,
             jwt: String::new(),
         };
-        let agent_lib = StdAgentLibrary::new(agent.clone(), task_context.clone());
+        let context = Context::Task(task_context.clone());
+
+        let agent_lib = StdAgentLibrary::new(agent.clone(), context.clone());
         self.inner.register_lib(agent_lib);
 
-        let report_lib = StdReportLibrary::new(agent.clone(), task_context.clone());
+        let report_lib = StdReportLibrary::new(agent.clone(), context.clone());
         self.inner.register_lib(report_lib);
 
-        let pivot_lib = StdPivotLibrary::new(agent.clone(), task_context.clone());
+        let pivot_lib = StdPivotLibrary::new(agent.clone(), context.clone());
         self.inner.register_lib(pivot_lib);
+
+        self.inner.register_lib(StdChainLibrary::new(agent.clone()));
 
         // Assets library
         let backend = Arc::new(crate::assets::std::AgentAssets::new(
             agent.clone(),
-            task_context,
+            context,
             Vec::new(),
         ));
         let mut assets_lib = StdAssetsLibrary::new();
@@ -191,31 +209,35 @@ impl Interpreter {
         self.inner.register_lib(PivotLibraryFake);
         #[cfg(feature = "fake_assets")]
         self.inner.register_lib(FakeAssetsLibrary);
+        #[cfg(feature = "fake_chain")]
+        self.inner.register_lib(FakeChainLibrary::new());
         self
     }
 
     #[cfg(feature = "stdlib")]
-    pub fn with_task_context(
+    pub fn with_context(
         mut self,
         agent: Arc<dyn Agent>,
-        task_context: TaskContext,
+        context: Context,
         remote_assets: Vec<String>,
         backend: Arc<dyn assets::std::AssetBackend>,
     ) -> Self {
-        let agent_lib = StdAgentLibrary::new(agent.clone(), task_context.clone());
+        let agent_lib = StdAgentLibrary::new(agent.clone(), context.clone());
         self.inner.register_lib(agent_lib);
 
-        let report_lib = StdReportLibrary::new(agent.clone(), task_context.clone());
+        let report_lib = StdReportLibrary::new(agent.clone(), context.clone());
         self.inner.register_lib(report_lib);
 
-        let pivot_lib = StdPivotLibrary::new(agent.clone(), task_context.clone());
+        let pivot_lib = StdPivotLibrary::new(agent.clone(), context.clone());
         self.inner.register_lib(pivot_lib);
+
+        self.inner.register_lib(StdChainLibrary::new(agent.clone()));
 
         let mut assets_lib = StdAssetsLibrary::new();
         // As with previously, remote assets can shadow the Embedded Assets
         let agent_backend = Arc::new(crate::assets::std::AgentAssets::new(
             agent.clone(),
-            task_context,
+            context,
             remote_assets.clone(),
         ));
         assets_lib.add_shadow(agent_backend.clone());
@@ -258,3 +280,6 @@ mod bindings_test;
 
 #[cfg(all(test, feature = "fake_bindings"))]
 mod input_params_test;
+
+#[cfg(test)]
+mod process_report_test;

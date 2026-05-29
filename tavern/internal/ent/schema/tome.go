@@ -32,6 +32,9 @@ func (Tome) Fields() []ent.Field {
 			).
 			Comment("Name of the tome"),
 		field.String("description").
+			SchemaType(map[string]string{
+				dialect.MySQL: "LONGTEXT", // Override MySQL, improve length maximum
+			}).
 			Comment("Information about the tome"),
 		field.String("author").
 			Comment("Name of the author who created the tome."),
@@ -59,16 +62,6 @@ func (Tome) Fields() []ent.Field {
 			).
 			Default("UNSPECIFIED").
 			Comment("MITRE ATT&CK tactic provided by the tome."),
-		field.Bool("run_on_new_beacon_callback").
-			Default(false).
-			Comment("If true, this tome will automatically be queued for all new Beacon callbacks."),
-		field.Bool("run_on_first_host_callback").
-			Default(false).
-			Comment("If true, this tome will automatically be queued for the first new callback on a Host."),
-		field.String("run_on_schedule").
-			// Validate() // TODO: Cron schedule validation
-			Default("").
-			Comment("Cron-like schedule for this tome to be automatically queued."),
 		field.String("param_defs").
 			Validate(validators.NewTomeParameterDefinitions()).
 			Optional().
@@ -111,12 +104,6 @@ func (Tome) Edges() []ent.Edge {
 				entgql.Skip(entgql.SkipMutationCreateInput, entgql.SkipMutationUpdateInput),
 			).
 			Comment("Repository from which this Tome was imported (may be null)."),
-		edge.To("scheduled_hosts", Host.Type).
-			Annotations(
-				entgql.RelayConnection(),
-				entgql.MultiOrder(),
-			).
-			Comment("If a schedule is configured for this tome, you may limit which hosts it runs on using this field. If a schedule is configured but no hosts are set, the tome will run on all hosts."),
 	}
 }
 

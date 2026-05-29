@@ -3,6 +3,9 @@ import { classNames } from '../../utils/utils';
 import logo from '../../assets/eldrich.png';
 import { ArrowLeftOnRectangleIcon } from '@heroicons/react/24/outline';
 import { usePageNavigation } from './usePageNavigation';
+import { Avatar, HStack } from '@chakra-ui/react';
+import { useAuthorization } from '../../context/AuthorizationContext';
+import NotificationBell from '../notifications/NotificationBell';
 
 type FullSidebarNavProps = {
     currNavItem?: string;
@@ -11,9 +14,11 @@ type FullSidebarNavProps = {
 
 const FullSidebarNav = ({ currNavItem, handleSidebarMinimized }: FullSidebarNavProps) => {
     const navigation = usePageNavigation();
+    const { data } = useAuthorization();
+    const user = data?.me;
 
     return (
-        <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col">
+        <div className="hidden lg:fixed lg:inset-y-0 lg:z-40 lg:flex lg:w-72 lg:flex-col">
             {/* Sidebar component */}
             <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-gray-900 px-6">
                 <div className=' flex flex-row justify-between'>
@@ -73,6 +78,18 @@ const FullSidebarNav = ({ currNavItem, handleSidebarMinimized }: FullSidebarNavP
                         </li>
                     </ul>
                 </nav>
+                <div className="mt-auto pb-4">
+                    <HStack justify="space-between">
+                        <Link to="/profile" className={classNames(
+                            currNavItem === 'Profile' ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white',
+                            'group flex items-center gap-x-4 rounded-md p-2 text-sm leading-6 font-semibold flex-1'
+                        )}>
+                            <Avatar size="sm" name={user?.name || ''} src={user?.photoURL || undefined} />
+                            <span aria-hidden="true">{user?.name}</span>
+                        </Link>
+                        <NotificationBell />
+                    </HStack>
+                </div>
             </div>
         </div>
     );

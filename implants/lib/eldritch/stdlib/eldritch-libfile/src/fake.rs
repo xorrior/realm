@@ -201,6 +201,76 @@ impl FileLibrary for FileLibraryFake {
         }
     }
 
+    fn list_named_pipes(&self, _detailed: Option<bool>) -> Result<Value, String> {
+        Ok(Value::List(alloc::sync::Arc::new(spin::RwLock::new(
+            alloc::vec![
+                Value::String("fake_pipe1".to_string()),
+                Value::String("fake_pipe2".to_string()),
+            ],
+        ))))
+    }
+
+    fn list_recent(&self, path: Option<String>, limit: Option<i64>) -> Result<Vec<String>, String> {
+        let mut root = self.root.lock();
+        let path_str = path.unwrap_or_else(|| {
+            if cfg!(windows) {
+                "C:\\".to_string()
+            } else {
+                "/".to_string()
+            }
+        });
+        let limit_val = limit.unwrap_or(10);
+        let parts = Self::normalize_path(&path_str);
+        let mut files = Vec::new();
+
+        fn traverse_recursive(entry: &FsEntry, current_path: String, files: &mut Vec<String>) {
+            match entry {
+                FsEntry::File(_) => {
+                    files.push(current_path);
+                }
+                FsEntry::Dir(map) => {
+                    for (name, child) in map {
+                        let child_path = if current_path == "/" {
+                            format!("/{}", name)
+                        } else {
+                            format!("{}/{}", current_path, name)
+                        };
+                        traverse_recursive(child, child_path, files);
+                    }
+                }
+            }
+        }
+
+        if let Some(entry) = Self::traverse(&mut root, &parts) {
+            // Reconstruct absolute path for start
+            // Note: traverse follows parts but doesn't track path string.
+            // We need to pass the base path.
+            // But if path is relative, normalize_path returns parts.
+            // Let's assume path passed in is what we want as base.
+            // Actually, we should use the resolved path.
+            // But here let's just use the path argument + traversed names.
+
+            // Wait, traverse returns reference to FsEntry inside the tree.
+            // To get full paths, we need to know where we are.
+            // But traverse consumes parts.
+
+            // It's easier to just traverse from the found entry and prepend `path`.
+            let base = if path_str.ends_with('/') && path_str.len() > 1 {
+                path_str.trim_end_matches('/').to_string()
+            } else {
+                path_str.clone()
+            };
+
+            traverse_recursive(entry, base, &mut files);
+        } else {
+            return Err("Path not found".to_string());
+        }
+
+        // Since we don't have timestamps, we just return the first `limit`
+        let limit_usize = if limit_val < 1 { 1 } else { limit_val as usize };
+        Ok(files.into_iter().take(limit_usize).collect())
+    }
+
     fn mkdir(&self, path: String, _parent: Option<bool>) -> Result<(), String> {
         let mut root = self.root.lock();
         let parts = Self::normalize_path(&path);
@@ -247,15 +317,19 @@ impl FileLibrary for FileLibraryFake {
         }
     }
 
-    fn read_binary(&self, path: String) -> Result<Vec<u8>, String> {
+    fn read_binary(&self, path: String) -> Result<Value, String> {
         let mut root = self.root.lock();
         let parts = Self::normalize_path(&path);
 
         if let Some(FsEntry::File(data)) = Self::traverse(&mut root, &parts) {
-            Ok(data.clone())
+            Ok(Value::Bytes(data.clone()))
         } else {
             Err("File not found".to_string())
         }
+    }
+
+    fn read_named_pipe(&self, _name: String, _max_bytes: Option<i64>) -> Result<String, String> {
+        Ok("Some pipe data".to_string())
     }
 
     fn pwd(&self) -> Result<Option<String>, String> {
@@ -292,6 +366,13 @@ impl FileLibrary for FileLibraryFake {
         Ok(format!("/tmp/{}", name))
     }
 
+    fn tmp_dir(&self) -> Result<String, String> {
+        let name = "tmp_dir".to_string();
+        let path = format!("/tmp/{}", name);
+        self.mkdir(path.clone(), None)?;
+        Ok(path)
+    }
+
     fn template(
         &self,
         _template_path: String,
@@ -300,6 +381,15 @@ impl FileLibrary for FileLibraryFake {
         _autoescape: bool,
     ) -> Result<(), String> {
         Ok(())
+    }
+
+    fn template_str(
+        &self,
+        _template: String,
+        _args: BTreeMap<String, Value>,
+        _autoescape: bool,
+    ) -> Result<String, String> {
+        Ok(String::new())
     }
 
     #[allow(unused_variables)]
@@ -327,6 +417,31 @@ impl FileLibrary for FileLibraryFake {
         if let Some(parent) = Self::traverse(&mut root, parent_parts) {
             if let FsEntry::Dir(map) = parent {
                 map.insert(name.clone(), FsEntry::File(content.into_bytes()));
+                return Ok(());
+            }
+            return Err("Parent is not a directory".to_string());
+        }
+        Err("Parent path not found".to_string())
+    }
+
+    fn write_binary(&self, path: String, content: Value) -> Result<(), String> {
+        let bytes = match content {
+            Value::Bytes(b) => b,
+            _ => return Err("content must be of type Bytes".into()),
+        };
+
+        let mut root = self.root.lock();
+        let parts = Self::normalize_path(&path);
+        if parts.is_empty() {
+            return Err("Invalid path".to_string());
+        }
+
+        let (parent_parts, name) = parts.split_at(parts.len() - 1);
+        let name = &name[0];
+
+        if let Some(parent) = Self::traverse(&mut root, parent_parts) {
+            if let FsEntry::Dir(map) = parent {
+                map.insert(name.clone(), FsEntry::File(bytes));
                 return Ok(());
             }
             return Err("Parent is not a directory".to_string());
@@ -396,5 +511,22 @@ mod tests {
         // Remove
         file.remove("/tmp/notes_backup.txt".into()).unwrap();
         assert!(!file.exists("/tmp/notes_backup.txt".into()).unwrap());
+    }
+
+    #[test]
+    fn test_list_recent_default_args() {
+        let file = FileLibraryFake::default();
+
+        // Default path "/" should list files across the whole fake filesystem
+        let all_files = file.list_recent(None, None).unwrap();
+
+        // In default fake FS, we have: /home/user/notes.txt, /home/user/todo.txt, /etc/passwd
+        assert!(all_files.len() >= 3);
+        assert!(all_files.contains(&"/home/user/notes.txt".to_string()));
+        assert!(all_files.contains(&"/etc/passwd".to_string()));
+
+        // Default limit (10) should capture all of them
+        let limited_files = file.list_recent(None, Some(1)).unwrap();
+        assert_eq!(limited_files.len(), 1);
     }
 }

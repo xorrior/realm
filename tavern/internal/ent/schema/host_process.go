@@ -36,12 +36,12 @@ func (HostProcess) Fields() []ent.Field {
 			).
 			Comment("The name of the process."),
 		field.String("principal").
-			NotEmpty().
+			Optional().
 			Comment("The user the process is running as."),
 		field.String("path").
 			Optional().
 			Comment("The path to the process executable."),
-		field.String("cmd").
+		field.Text("cmd").
 			Optional().
 			Comment("The command used to execute the process."),
 		field.String("env").
@@ -53,6 +53,13 @@ func (HostProcess) Fields() []ent.Field {
 		field.Enum("status").
 			GoType(epb.Process_Status(0)).
 			Comment("Current process status."),
+		field.Uint64("start_time").
+			Optional().
+			Annotations(
+				entgql.Type("Uint64"),
+				entgql.OrderField("PROCESS_START_TIME"),
+			).
+			Comment("The process start time."),
 	}
 }
 
@@ -67,13 +74,19 @@ func (HostProcess) Edges() []ent.Edge {
 			).
 			Comment("Host the process was reported on."),
 		edge.From("task", Task.Type).
-			Required().
 			Unique().
 			Ref("reported_processes").
 			Annotations(
 				entsql.OnDelete(entsql.Cascade),
 			).
 			Comment("Task that reported this process."),
+		edge.From("shell_task", ShellTask.Type).
+			Unique().
+			Ref("reported_processes").
+			Annotations(
+				entsql.OnDelete(entsql.Cascade),
+			).
+			Comment("Shell Task that reported this process."),
 	}
 }
 

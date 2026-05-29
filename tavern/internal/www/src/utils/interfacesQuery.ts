@@ -1,4 +1,4 @@
-import { OrderDirection, QuestOrderField, TaskOrderField, HostOrderField, RepositoryOrderField } from "./enums";
+import { OrderDirection, QuestOrderField, TaskOrderField, HostOrderField, RepositoryOrderField, NotificationPriority, EventKind } from "./enums";
 
 export type Cursor = string | null;
 
@@ -57,11 +57,19 @@ export interface HostNode {
         edges: TagEdge[];
     };
     beacons?: {
+        totalCount: number;
         edges: BeaconEdge[];
     };
     credentials?: {
+        totalCount: number;
         edges: CredentialEdge[];
     };
+    processes?: {
+        totalCount: number;
+    }
+    files?:{
+        totalCount: number;
+    }
 }
 
 export interface HostEdge {
@@ -111,6 +119,7 @@ export interface UserNode {
     photoURL: string;
     isActivated: boolean;
     isAdmin: boolean;
+    notifications?: NotificationConnection;
 }
 
 export interface UserEdge {
@@ -183,6 +192,12 @@ export interface TaskNode {
     output: string | null;
     shells: {
         edges: ShellEdge[];
+    };
+    reportedProcesses: {
+        totalCount: number;
+    };
+    reportedFiles: {
+        totalCount: number;
     };
     quest: QuestNode;
     beacon: BeaconNode;
@@ -313,4 +328,176 @@ export interface RepositoryQueryTopLevel {
 
 export interface GetRepositoryQueryVariables {
     orderBy?: RepositoryOrderBy[];
+}
+
+export interface LinkNode {
+    id: string;
+    path: string;
+    expiresAt: string;
+    downloads: number;
+    downloadLimit: number | null;
+    creator?: UserNode | null;
+}
+
+export interface LinkEdge {
+    node: LinkNode;
+}
+
+export interface AssetNode {
+    id: string;
+    name: string;
+    size: number;
+    hash: string;
+    createdAt: string;
+    lastModifiedAt: string;
+    links: {
+        totalCount: number;
+        edges: LinkEdge[];
+    };
+    tomes: {
+        totalCount: number;
+        edges: TomeEdge[];
+    };
+    creator?: UserNode | null;
+}
+
+export interface AssetEdge {
+    node: AssetNode;
+}
+
+export interface AssetQueryResponse {
+    pageInfo: QueryPageInfo;
+    totalCount: number;
+    edges: AssetEdge[];
+}
+
+export interface AssetQueryTopLevel {
+    assets: AssetQueryResponse;
+}
+
+export interface ProcessNode {
+    id: string;
+    lastModifiedAt: string;
+    principal: string;
+    pid: number;
+    ppid: number;
+    name: string;
+    path: string | null;
+    cmd: string | null;
+    status: string;
+    startTime: number | null;
+    env: string | null;
+    cwd: string | null;
+}
+
+export interface ProcessEdge {
+    node: ProcessNode;
+}
+
+// Beacon ID query types (minimal data for filtering)
+export interface BeaconIdNode {
+    id: string;
+    principal?: string;
+    transport?: string;
+    host?: {
+        id: string;
+    };
+}
+
+export interface BeaconIdEdge {
+    node: BeaconIdNode;
+}
+
+export interface BeaconIdsQueryResponse {
+    totalCount: number;
+    pageInfo: QueryPageInfo;
+    edges: BeaconIdEdge[];
+}
+
+export interface BeaconIdsQueryTopLevel {
+    beacons: BeaconIdsQueryResponse;
+}
+
+export interface BeaconDetailQueryResponse {
+    beacons: {
+        edges: { node: BeaconNode }[];
+    };
+}
+
+export interface GetBeaconIdsQueryVariables {
+    where?: Record<string, unknown>;
+    first?: number;
+    last?: number;
+    after?: Cursor;
+    before?: Cursor;
+    orderBy?: OrderByField[];
+}
+
+export interface GetBeaconDetailQueryVariables {
+    id: string;
+}
+
+// Tome ID query types (minimal data for listing)
+export interface TomeIdNode {
+    id: string;
+    name: string;
+    paramDefs: string | null;
+}
+
+export interface TomeIdEdge {
+    node: TomeIdNode;
+}
+
+export interface TomeIdsQueryResponse {
+    edges: TomeIdEdge[];
+}
+
+export interface TomeIdsQueryTopLevel {
+    tomes: TomeIdsQueryResponse;
+}
+
+export interface TomeDetailQueryResponse {
+    tomes: {
+        edges: { node: TomeNode }[];
+    };
+}
+
+export interface GetTomeIdsQueryVariables {
+    where?: Record<string, unknown>;
+}
+
+export interface GetTomeDetailQueryVariables {
+    id: string;
+}
+
+export interface EventNode {
+    id: string;
+    createdAt: string;
+    lastModifiedAt: string;
+    timestamp: number;
+    kind: EventKind;
+    beacon?: BeaconNode;
+    host?: HostNode;
+    quest?: QuestNode;
+    user?: UserNode;
+}
+
+export interface NotificationNode {
+    id: string;
+    createdAt: string;
+    lastModifiedAt: string;
+    priority: NotificationPriority;
+    read: boolean;
+    archived: boolean;
+    event: EventNode;
+}
+
+export interface NotificationEdge {
+    node: NotificationNode;
+}
+
+export interface NotificationConnection {
+    edges: NotificationEdge[];
+    pageInfo: QueryPageInfo;
+    totalCount: number;
 }

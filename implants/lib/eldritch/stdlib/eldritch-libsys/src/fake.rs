@@ -63,11 +63,7 @@ impl SysLibrary for SysLibraryFake {
         Ok(1337)
     }
 
-    fn get_reg(
-        &self,
-        _reghive: String,
-        _regpath: String,
-    ) -> Result<BTreeMap<String, String>, String> {
+    fn get_reg(&self, _path: String) -> Result<BTreeMap<String, String>, String> {
         Ok(BTreeMap::new())
     }
 
@@ -99,6 +95,16 @@ impl SysLibrary for SysLibraryFake {
         Ok(false)
     }
 
+    fn list_users(&self) -> Result<Vec<BTreeMap<String, Value>>, String> {
+        let mut users = Vec::new();
+        let mut root = BTreeMap::new();
+        root.insert("principal".into(), Value::String("root".into()));
+        root.insert("uid".into(), Value::Int(0));
+        root.insert("gid".into(), Value::Int(0));
+        users.push(root);
+        Ok(users)
+    }
+
     fn shell(&self, cmd: String) -> Result<BTreeMap<String, Value>, String> {
         let mut map = BTreeMap::new();
         map.insert("stdout".into(), Value::String(format!("Executed: {}", cmd)));
@@ -107,35 +113,12 @@ impl SysLibrary for SysLibraryFake {
         Ok(map)
     }
 
-    fn write_reg_hex(
+    fn write_reg(
         &self,
-        _reghive: String,
-        _regpath: String,
+        _path: String,
         _regname: String,
         _regtype: String,
-        _regvalue: String,
-    ) -> Result<bool, String> {
-        Ok(true)
-    }
-
-    fn write_reg_int(
-        &self,
-        _reghive: String,
-        _regpath: String,
-        _regname: String,
-        _regtype: String,
-        _regvalue: i64,
-    ) -> Result<bool, String> {
-        Ok(true)
-    }
-
-    fn write_reg_str(
-        &self,
-        _reghive: String,
-        _regpath: String,
-        _regname: String,
-        _regtype: String,
-        _regvalue: String,
+        _regvalue: Value,
     ) -> Result<bool, String> {
         Ok(true)
     }

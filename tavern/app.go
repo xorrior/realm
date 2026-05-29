@@ -3,12 +3,17 @@ package main
 import (
 	"context"
 	"crypto/ecdh"
+	"crypto/ed25519"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
 	"net/http/pprof"
+	"net/url"
 	"os"
 	"strings"
 
@@ -22,6 +27,9 @@ import (
 	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 	"realm.pub/tavern/internal/auth"
+	"realm.pub/tavern/internal/builder"
+	"realm.pub/tavern/internal/builder/builderpb"
+	"realm.pub/tavern/internal/builder/executor"
 	"realm.pub/tavern/internal/c2"
 	"realm.pub/tavern/internal/c2/c2pb"
 	"realm.pub/tavern/internal/cdn"
@@ -30,19 +38,29 @@ import (
 	"realm.pub/tavern/internal/ent"
 	"realm.pub/tavern/internal/ent/migrate"
 	"realm.pub/tavern/internal/graphql"
+	"realm.pub/tavern/internal/hostcheck"
 	tavernhttp "realm.pub/tavern/internal/http"
+	tavernshell "realm.pub/tavern/internal/http/shell"
 	"realm.pub/tavern/internal/http/stream"
+	tavernmcp "realm.pub/tavern/internal/mcp"
 	"realm.pub/tavern/internal/portals"
 	"realm.pub/tavern/internal/portals/mux"
+	"realm.pub/tavern/internal/portals/ssh"
+	"realm.pub/tavern/internal/portals/pty"
 	"realm.pub/tavern/internal/redirectors"
+	"realm.pub/tavern/internal/scheduler"
 	"realm.pub/tavern/internal/secrets"
 	"realm.pub/tavern/internal/www"
 	"realm.pub/tavern/portals/portalpb"
 	"realm.pub/tavern/tomes"
+	"realm.pub/tavern/tools"
 
 	_ "realm.pub/tavern/internal/redirectors/dns"
 	_ "realm.pub/tavern/internal/redirectors/grpc"
 	_ "realm.pub/tavern/internal/redirectors/http1"
+	_ "realm.pub/tavern/internal/redirectors/icmp"
+	_ "realm.pub/tavern/internal/redirectors/quic"
+	_ "realm.pub/tavern/internal/scheduler/mem"
 )
 
 func init() {
@@ -78,12 +96,17 @@ func newApp(ctx context.Context) (app *cli.App) {
 					Usage: "Transport protocol to use for redirector",
 					Value: "grpc",
 				},
+				cli.StringFlag{
+					Name:  "tls-hostname",
+					Usage: "Enable TLS and use this hostname for certificate provisioning via ACME (e.g. redirector.example.com); falls back to self-signed if ACME fails",
+				},
 			},
 			Action: func(c *cli.Context) error {
 				var (
-					upstream  = c.Args().First()
-					listenOn  = c.String("listen")
-					transport = c.String("transport")
+					upstream    = c.Args().First()
+					listenOn    = c.String("listen")
+					transport   = c.String("transport")
+					tlsHostname = c.String("tls-hostname")
 				)
 				if upstream == "" {
 					return fmt.Errorf("gRPC upstream address is required (first argument)")
@@ -94,8 +117,19 @@ func newApp(ctx context.Context) (app *cli.App) {
 				if transport == "" {
 					transport = "grpc"
 				}
-				slog.InfoContext(ctx, "starting redirector", "upstream", upstream, "transport", transport, "listen_on", listenOn)
-				return redirectors.Run(ctx, transport, listenOn, upstream)
+
+				var tlsCfg *tls.Config
+				if tlsHostname != "" {
+					var err error
+					tlsCfg, err = redirectors.NewTLSConfig(ctx, tlsHostname)
+					if err != nil {
+						return fmt.Errorf("failed to configure TLS: %w", err)
+					}
+					slog.InfoContext(ctx, "TLS configured for redirector", "hostname", tlsHostname)
+				}
+
+				slog.InfoContext(ctx, "starting redirector", "upstream", upstream, "transport", transport, "listen_on", listenOn, "tls_hostname", tlsHostname)
+				return redirectors.Run(ctx, transport, listenOn, upstream, tlsCfg)
 			},
 			Subcommands: cli.Commands{
 				cli.Command{
@@ -114,6 +148,39 @@ func newApp(ctx context.Context) (app *cli.App) {
 						return nil
 					},
 				},
+			},
+		},
+		{
+			Name:  "builder",
+			Usage: "Run a builder that compiles agents for target platforms",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  "config",
+					Usage: "Path to the builder YAML configuration file",
+				},
+			},
+			Action: func(c *cli.Context) error {
+				configPath := c.String("config")
+				if configPath == "" {
+					return fmt.Errorf("--config flag is required")
+				}
+
+				cfg, err := builder.ParseConfig(configPath)
+				if err != nil {
+					return fmt.Errorf("failed to parse builder config: %w", err)
+				}
+
+				slog.InfoContext(ctx, "starting builder",
+					"config", configPath,
+					"supported_targets", cfg.SupportedTargets,
+				)
+
+				exec, err := executor.NewDockerExecutorFromEnv(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to create docker executor: %w", err)
+				}
+
+				return builder.Run(ctx, cfg, exec)
 			},
 		},
 	}
@@ -203,6 +270,11 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 	}
 
 	// Load Default Tomes
+	// Load Tools
+	if err := tools.UploadTools(ctx, client, tools.FileSystem); err != nil {
+		slog.ErrorContext(ctx, "failed to upload tools", "err", err)
+	}
+
 	if cfg.IsDefaultTomeImportEnabled() {
 		if err := tomes.UploadTomes(ctx, client, tomes.FileSystem); err != nil {
 			slog.ErrorContext(ctx, "failed to upload default tomes", "err", err)
@@ -211,6 +283,21 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 
 	// Initialize Git Tome Importer
 	git := cfg.NewGitImporter(client)
+
+	// Initialize Builder CA
+	builderCACert, builderCAKey, err := getBuilderCA()
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to initialize builder CA: %w", err)
+	}
+
+	// Get server X25519 public key for agent builds
+	serverX25519PubKey, err := GetPubKey()
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to get server X25519 public key: %w", err)
+	}
+	serverPubkeyB64 := base64.StdEncoding.EncodeToString(serverX25519PubKey.Bytes())
 
 	// Initialize Test Data
 	if cfg.IsTestDataEnabled() {
@@ -240,10 +327,113 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 	// Configure Portal Mux
 	portalMux := cfg.NewPortalMux(ctx)
 
+	// Initialize Scheduler
+	schedulerURI := EnvSchedulerURI.String()
+	slog.InfoContext(ctx, "initializing scheduler", "uri", schedulerURI)
+	sched, err := scheduler.New(ctx, schedulerURI)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to initialize scheduler (uri=%q): %w", schedulerURI, err)
+	}
+	slog.InfoContext(ctx, "scheduler initialized successfully", "uri", schedulerURI)
+
+	// Determine host check URL based on the scheduler backend.
+	// The in-memory scheduler fires HTTP requests from the same process,
+	// so localhost is always reachable. For external schedulers like GCP
+	// Cloud Scheduler, requests originate outside this process and must
+	// target a publicly accessible address (PUBLIC_URL).
+	listenAddr := "0.0.0.0:80"
+	if cfg.srv != nil && cfg.srv.Addr != "" {
+		listenAddr = cfg.srv.Addr
+	}
+	var hostCheckURL string
+
+	// The in-memory scheduler uses robfig/cron which supports "@every 10s"
+	// for sub-minute intervals. External schedulers like GCP Cloud Scheduler
+	// only support standard unix-cron expressions with a minimum granularity
+	// of 1 minute, so we use "* * * * *" (every minute) instead.
+	var hostCheckSchedule string
+
+	schedulerURL, _ := url.Parse(schedulerURI)
+	if schedulerURL != nil && schedulerURL.Scheme == "mem" {
+		hostCheckURL = fmt.Sprintf("http://127.0.0.1%s/internal/host-check", portFromAddr(listenAddr))
+		hostCheckSchedule = "@every 10s"
+	} else {
+		domain := EnvPublicURL.String()
+		if domain == "" {
+			client.Close()
+			sched.Close()
+			return nil, fmt.Errorf("PUBLIC_URL must be set when using an external scheduler (SCHEDULER_URI=%q)", schedulerURI)
+		}
+		if !strings.HasPrefix(domain, "http") {
+			domain = fmt.Sprintf("https://%s", domain)
+		}
+		hostCheckURL = fmt.Sprintf("%s/internal/host-check", strings.TrimRight(domain, "/"))
+		hostCheckSchedule = "* * * * *"
+	}
+	// Generate a JWT scoped to the host-check endpoint and append it as a query parameter.
+	hostCheckToken, err := hostcheck.NewToken(privKey)
+	if err != nil {
+		client.Close()
+		sched.Close()
+		return nil, fmt.Errorf("failed to generate host-check JWT: %w", err)
+	}
+	hostCheckURL = fmt.Sprintf("%s?token=%s", hostCheckURL, url.QueryEscape(hostCheckToken))
+	slog.InfoContext(ctx, "resolved host check configuration", "schedule", hostCheckSchedule, "scheduler_scheme", schedulerURL.Scheme)
+
+	// Schedule a recurring host-lost check.
+	// In-memory: fires every 10 seconds via robfig/cron.
+	// GCP Cloud Scheduler: fires every minute (minimum supported granularity).
+	// If the job is already scheduled (e.g. from a previous startup), the
+	// scheduler will return an error which we log and ignore.
+	slog.InfoContext(ctx, "scheduling host-lost-poll job", "schedule", hostCheckSchedule)
+	if err := sched.Schedule(ctx, scheduler.Job{
+		Name:     "host-lost-poll",
+		Schedule: hostCheckSchedule,
+		HTTPTarget: scheduler.HTTPTarget{
+			URL:    hostCheckURL,
+			Method: "POST",
+		},
+	}); err != nil {
+		if errors.Is(err, scheduler.ErrJobExists) {
+			slog.InfoContext(ctx, "host-lost-poll job already scheduled, skipping")
+		} else {
+			client.Close()
+			sched.Close()
+			return nil, fmt.Errorf("failed to schedule host-lost check (schedule=%q): %w", hostCheckSchedule, err)
+		}
+	} else {
+		slog.InfoContext(ctx, "host-lost-poll job scheduled successfully", "schedule", hostCheckSchedule)
+	}
+
+	// GraphQL Handler (shared with MCP)
+	gqlHandler := newGraphQLHandler(client, git, graphql.WithBuilderCAKey(builderCAKey), graphql.WithBuilderCA(builderCACert), graphql.WithPortalMux(portalMux))
+
 	// Route Map
 	routes := tavernhttp.RouteMap{
 		"/status": tavernhttp.Endpoint{
 			Handler:              newStatusHandler(),
+			AllowUnauthenticated: true,
+			AllowUnactivated:     true,
+		},
+		"/auth/rda/code": tavernhttp.Endpoint{
+			Handler:              tavernhttp.NewRDACodeHandler(client),
+			AllowUnauthenticated: true,
+			AllowUnactivated:     true,
+		},
+		"/auth/rda/token": tavernhttp.Endpoint{
+			Handler:              tavernhttp.NewRDATokenHandler(client),
+			AllowUnauthenticated: true,
+			AllowUnactivated:     true,
+		},
+		"/auth/rda/approve": tavernhttp.Endpoint{
+			Handler: tavernhttp.NewRDAApproveHandler(client),
+		},
+		"/auth/rda/revoke": tavernhttp.Endpoint{
+			Handler: tavernhttp.NewRDARevokeHandler(client),
+		},
+		"/api/auth/signout": tavernhttp.Endpoint{
+			Handler:              tavernhttp.NewSignoutHandler(),
 			AllowUnauthenticated: true,
 			AllowUnactivated:     true,
 		},
@@ -262,7 +452,7 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 			AllowUnactivated:     true,
 		},
 		"/graphql": tavernhttp.Endpoint{
-			Handler:          newGraphQLHandler(client, git),
+			Handler:          gqlHandler,
 			AllowUnactivated: true,
 		},
 		"/c2.C2/": tavernhttp.Endpoint{
@@ -273,6 +463,11 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 		"/portal.Portal/": tavernhttp.Endpoint{
 			Handler: newPortalGRPCHandler(client, portalMux),
 		},
+		"/builder.Builder/": tavernhttp.Endpoint{
+			Handler:              newBuilderGRPCHandler(client, builderCACert, serverPubkeyB64),
+			AllowUnauthenticated: true,
+			AllowUnactivated:     true,
+		},
 		"/cdn/": tavernhttp.Endpoint{
 			Handler:              cdn.NewLinkDownloadHandler(client, "/cdn/"),
 			AllowUnauthenticated: true,
@@ -281,14 +476,34 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 		"/cdn/hostfiles/": tavernhttp.Endpoint{
 			Handler: cdn.NewHostFileDownloadHandler(client, "/cdn/hostfiles/"),
 		},
+		"/cdn/screenshots/": tavernhttp.Endpoint{
+			Handler: cdn.NewScreenshotDownloadHandler(client, "/cdn/screenshots/"),
+		},
+		"/assets/download/": tavernhttp.Endpoint{
+			Handler: cdn.NewDownloadHandler(client, "/assets/download/"),
+		},
 		"/cdn/upload": tavernhttp.Endpoint{
 			Handler: cdn.NewUploadHandler(client),
 		},
 		"/shell/ws": tavernhttp.Endpoint{
 			Handler: stream.NewShellHandler(client, wsShellMux),
 		},
+		"/shellv2/ws": tavernhttp.Endpoint{
+			Handler: tavernshell.NewHandler(client, portalMux),
+		},
 		"/shell/ping": tavernhttp.Endpoint{
 			Handler: stream.NewPingHandler(client, wsShellMux),
+		},
+		"/portals/ssh/ws": tavernhttp.Endpoint{
+			Handler: ssh.NewHandler(client, portalMux),
+		},
+		"/portals/pty/ws": tavernhttp.Endpoint{
+			Handler: pty.NewHandler(client, portalMux),
+		},
+		"/internal/host-check": tavernhttp.Endpoint{
+			Handler:              hostcheck.NewHandler(client, pubKey),
+			AllowUnauthenticated: true,
+			AllowUnactivated:     true,
 		},
 		"/": tavernhttp.Endpoint{
 			Handler:              www.NewHandler(httpLogger),
@@ -305,6 +520,15 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 	if cfg.IsPProfEnabled() {
 		slog.WarnContext(ctx, "performance profiling is enabled, do not use in production as this may leak sensitive information")
 		registerProfiler(routes)
+	}
+
+	// Setup MCP Server
+	if cfg.IsMCPEnabled() {
+		slog.InfoContext(ctx, "AI MCP server is enabled at /mcp")
+		mcpHandler := tavernmcp.NewHandler(client, Version, gqlHandler)
+		routes["/mcp/"] = tavernhttp.Endpoint{
+			Handler: mcpHandler,
+		}
 	}
 
 	// Create Tavern HTTP Server
@@ -355,8 +579,8 @@ func NewServer(ctx context.Context, options ...func(*Config)) (*Server, error) {
 	return tSrv, nil
 }
 
-func newGraphQLHandler(client *ent.Client, repoImporter graphql.RepoImporter) http.Handler {
-	srv := handler.NewDefaultServer(graphql.NewSchema(client, repoImporter))
+func newGraphQLHandler(client *ent.Client, repoImporter graphql.RepoImporter, options ...func(*graphql.Resolver)) http.Handler {
+	srv := handler.NewDefaultServer(graphql.NewSchema(client, repoImporter, options...))
 	srv.Use(entgql.Transactioner{TxOpener: client})
 
 	// Configure Raw Query Logging
@@ -469,6 +693,27 @@ func getKeyPairEd25519() (pubKey []byte, privKey []byte, err error) {
 	return pubKey, privKey, nil
 }
 
+// getBuilderCA returns the Builder CA certificate and private key for signing builder certificates.
+// It uses the existing ED25519 key from the secrets manager.
+func getBuilderCA() (caCert *x509.Certificate, caKey ed25519.PrivateKey, err error) {
+	secretsManager, err := newSecretsManager()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	caKey, err = crypto.GetPrivKeyED25519(secretsManager)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get ED25519 private key: %w", err)
+	}
+
+	caCert, err = builder.CreateCA(caKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create builder CA: %w", err)
+	}
+
+	return caCert, caKey, nil
+}
+
 func newPortalGRPCHandler(graph *ent.Client, portalMux *mux.Mux) http.Handler {
 	portalSrv := portals.New(graph, portalMux)
 	grpcSrv := grpc.NewServer(
@@ -491,7 +736,35 @@ func newPortalGRPCHandler(graph *ent.Client, portalMux *mux.Mux) http.Handler {
 	})
 }
 
-func newGRPCHandler(client *ent.Client, grpcShellMux *stream.Mux, portalMux *mux.Mux) http.Handler {
+func newBuilderGRPCHandler(client *ent.Client, caCert *x509.Certificate, serverPubkey string) http.Handler {
+	builderSrv := builder.New(client, serverPubkey)
+	grpcSrv := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			builder.NewMTLSAuthInterceptor(caCert, client),
+			grpcWithUnaryMetrics,
+		),
+		grpc.ChainStreamInterceptor(
+			builder.NewMTLSStreamAuthInterceptor(caCert, client),
+			grpcWithStreamMetrics,
+		),
+	)
+	builderpb.RegisterBuilderServer(grpcSrv, builderSrv)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != 2 {
+			http.Error(w, "grpc requires HTTP/2", http.StatusBadRequest)
+			return
+		}
+
+		if contentType := r.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "application/grpc") {
+			http.Error(w, "must specify Content-Type application/grpc", http.StatusBadRequest)
+			return
+		}
+
+		grpcSrv.ServeHTTP(w, r)
+	})
+}
+
+func newGRPCHandler(client *ent.Client, grpcShellMux *stream.Mux, portalMux *mux.Mux, c2Opts ...c2.Option) http.Handler {
 	pub, priv, err := getKeyPairX25519()
 	if err != nil {
 		panic(err)
@@ -504,7 +777,7 @@ func newGRPCHandler(client *ent.Client, grpcShellMux *stream.Mux, portalMux *mux
 		panic(err)
 	}
 
-	c2srv := c2.New(client, grpcShellMux, portalMux, ed25519PubKey, ed25519PrivKey)
+	c2srv := c2.New(client, grpcShellMux, portalMux, ed25519PubKey, ed25519PrivKey, c2Opts...)
 	xchacha := cryptocodec.StreamDecryptCodec{
 		Csvc: cryptocodec.NewCryptoSvc(priv),
 	}
@@ -551,4 +824,14 @@ func registerProfiler(router tavernhttp.RouteMap) {
 	router.Handle("/debug/pprof/heap", pprof.Handler("heap"))
 	router.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
 	router.Handle("/debug/pprof/block", pprof.Handler("block"))
+}
+
+// portFromAddr extracts the port (including the colon prefix) from a listen
+// address like "0.0.0.0:80" or ":8080". If the address contains no colon,
+// the default ":80" is returned.
+func portFromAddr(addr string) string {
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		return addr[i:]
+	}
+	return ":80"
 }

@@ -3,6 +3,9 @@ import { classNames } from '../../utils/utils';
 import { ArrowRightOnRectangleIcon } from '@heroicons/react/24/outline';
 import logo from '../../assets/eldrich.png';
 import { usePageNavigation } from './usePageNavigation';
+import { Avatar, VStack } from '@chakra-ui/react';
+import { useAuthorization } from '../../context/AuthorizationContext';
+import NotificationBell from '../notifications/NotificationBell';
 
 type MinimizedSidebarNavProps = {
     currNavItem?: string;
@@ -11,9 +14,11 @@ type MinimizedSidebarNavProps = {
 
 const MinimizedSidebarNav = ({ currNavItem, handleSidebarMinimized }: MinimizedSidebarNavProps) => {
     const navigation = usePageNavigation();
+    const { data } = useAuthorization();
+    const user = data?.me;
 
     return (
-        <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-24 lg:flex-col justify-between items-center bg-gray-900">
+        <div className="hidden lg:fixed lg:inset-y-0 lg:z-40 lg:flex lg:w-24 lg:flex-col justify-between items-center bg-gray-900">
             {/* Sidebar component */}
             <div className="flex grow flex-col gap-y-5 overflow-y-auto px-6">
                 <div className='flex flex-col h-28 justify-center'>
@@ -61,6 +66,17 @@ const MinimizedSidebarNav = ({ currNavItem, handleSidebarMinimized }: MinimizedS
                         </li>
                     </ul>
                 </nav>
+                <div className="mt-auto pb-4">
+                    <VStack spacing={4}>
+                        <NotificationBell />
+                        <Link to="/profile" className={classNames(
+                            currNavItem === 'Profile' ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white',
+                            'group flex items-center justify-center rounded-md p-2 text-sm leading-6 font-semibold'
+                        )}>
+                            <Avatar size="sm" name={user?.name || ''} src={user?.photoURL || undefined} />
+                        </Link>
+                    </VStack>
+                </div>
             </div>
             <div className="my-8">
                 <a href='/'>

@@ -202,6 +202,10 @@ impl Interpreter {
         self.call_stack.clear();
         self.current_func_name = "<module>".to_string();
 
+        if let Err(e) = exec::hoist_functions(self, &stmts) {
+            return Err(self.format_error(input, e));
+        }
+
         for stmt in stmts {
             match &stmt.kind {
                 // Special case: if top-level statement is an expression, return its value
@@ -489,21 +493,20 @@ impl Interpreter {
             }
 
             if !is_dot_access {
-                // 1. Keywords
-                let keywords = vec![
+                // 1. Keywords (filtered out as per request)
+                let keywords_to_filter = vec![
                     "def", "if", "elif", "else", "return", "for", "in", "True", "False", "None",
                     "and", "or", "not", "break", "continue", "pass", "lambda",
                 ];
-                for kw in keywords {
-                    candidates.insert(kw.to_string());
-                }
 
                 // 2. Builtins & Variables (walk up the environment chain)
                 let mut current_env = Some(self.env.clone());
                 while let Some(env_arc) = current_env {
                     let env_ref = env_arc.read();
                     for key in env_ref.values.keys() {
-                        candidates.insert(key.clone());
+                        if !keywords_to_filter.contains(&key.as_str()) {
+                            candidates.insert(key.clone());
+                        }
                     }
                     current_env = env_ref.parent.clone();
                 }

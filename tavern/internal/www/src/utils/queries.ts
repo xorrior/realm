@@ -55,6 +55,7 @@ query GetSearchFilters($groupTag: TagWhereInput, $serviceTag: TagWhereInput){
                     id
                     name
                     primaryIP
+                    externalIP
                 }
             }
         }
@@ -103,6 +104,7 @@ export const GET_HOST_QUERY = gql`
                     }
                 }
                 beacons {
+                    totalCount
                     edges {
                         node {
                             id
@@ -115,11 +117,18 @@ export const GET_HOST_QUERY = gql`
                     }
                 }
                 credentials {
+                    totalCount
                     edges {
                         node {
                             id
                         }
                     }
+                }
+                processes {
+                    totalCount
+                }
+                files{
+                    totalCount
                 }
             }
             }
@@ -269,6 +278,17 @@ export const GET_HOST_TASK_COUNT = gql`
     }
 `;
 
+export const GET_HOST_SHELL_COUNT = gql`
+    query GetHostShellCount($whereTotal: ShellWhereInput, $whereActive: ShellWhereInput){
+        totalShells: shells(where: $whereTotal){
+            totalCount
+        }
+        activeShells: shells(where: $whereActive){
+            totalCount
+        }
+    }
+`;
+
 export const GET_TASK_QUERY = gql`
     query GetTasks($where: TaskWhereInput, $first: Int, $last: Int, $after: Cursor, $before: Cursor, $orderBy: [TaskOrder!]) {
         tasks(
@@ -315,6 +335,12 @@ export const GET_TASK_QUERY = gql`
                                 }
                             }
                         }
+                    }
+                    reportedProcesses{
+                        totalCount
+                    }
+                    reportedFiles{
+                        totalCount
                     }
                     quest {
                         id
@@ -403,3 +429,111 @@ export const GET_HOST_CREDENTIALS = gql`
             }
         }
 }`;
+
+export const GET_BEACON_IDS_QUERY = gql`
+    query GetBeaconIds(
+        $where: BeaconWhereInput
+        $first: Int
+        $last: Int
+        $after: Cursor
+        $before: Cursor
+        $orderBy: [BeaconOrder!]
+    ) {
+        beacons(
+            where: $where
+            first: $first
+            last: $last
+            after: $after
+            before: $before
+            orderBy: $orderBy
+        ) {
+            totalCount
+            pageInfo {
+                hasNextPage
+                hasPreviousPage
+                startCursor
+                endCursor
+            }
+            edges {
+                node {
+                    id
+                    principal
+                    transport
+                    host {
+                        id
+                    }
+                }
+            }
+        }
+    }
+`;
+
+export const GET_BEACON_DETAIL_QUERY = gql`
+    query GetBeaconDetail($id: ID!) {
+        beacons(where: { id: $id }, first: 1) {
+            edges {
+                node {
+                    id
+                    name
+                    principal
+                    lastSeenAt
+                    interval
+                    transport
+                    host {
+                        id
+                        name
+                        primaryIP
+                        externalIP
+                        platform
+                        tags {
+                            edges {
+                                node {
+                                    id
+                                    kind
+                                    name
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+`;
+
+export const GET_TOME_IDS_QUERY = gql`
+    query GetTomeIds($where: TomeWhereInput) {
+        tomes(where: $where) {
+            edges {
+                node {
+                    id
+                    name
+                    paramDefs
+                }
+            }
+        }
+    }
+`;
+
+export const GET_TOME_DETAIL_QUERY = gql`
+    query GetTomeDetail($id: ID!) {
+        tomes(where: { id: $id }, first: 1) {
+            edges {
+                node {
+                    id
+                    name
+                    paramDefs
+                    tactic
+                    eldritch
+                    supportModel
+                    description
+                    uploader {
+                        id
+                        name
+                        photoURL
+                    }
+                }
+            }
+        }
+    }
+`;

@@ -3,6 +3,7 @@ import { Accordion, AccordionButton, AccordionIcon, AccordionItem, AccordionPane
 import CodeBlock from "./tavern-base-ui/CodeBlock";
 import { TomeNode } from "../utils/interfacesQuery";
 import { FieldInputParams } from "../utils/interfacesUI";
+import { toDisplayString } from "../utils/utils";
 
 type Props = {
     tome: TomeNode;
@@ -21,15 +22,31 @@ type ParamDisplayProps = {
 const ParamValuesDisplay = ({ params }: ParamDisplayProps) => (
     <>
         {params.map((paramDef: FieldInputParams) => {
-            if (!paramDef.value) return null;
+            const displayValue = toDisplayString(paramDef.value);
+            if (!displayValue) return null;
             return (
                 <div className="flex flex-row gap-1 text-sm text-gray-600" key={paramDef.name}>
                     <div className="capitalize">{paramDef.name}:</div>
-                    <div className="break-all">{paramDef.value}</div>
+                    <div className="break-all">{displayValue}</div>
                 </div>
             );
         })}
     </>
+);
+
+const ParamCodeBlock = ({ params }: ParamDisplayProps) => (
+    <div className="mx-3 flex flex-col gap-0">
+        {params.map((paramDef: FieldInputParams) => {
+            const displayValue = toDisplayString(paramDef.value);
+            if (!displayValue) return null;
+            return (
+                <div className="flex flex-row items-center justify-left text-gray-800" key={paramDef.name}>
+                    <div className="capitalize text-sm">{paramDef.name}:</div>
+                    <CodeBlock inlineButton code={displayValue} language="md" showCopyButton/>
+                </div>
+            );
+        })}
+    </div>
 );
 
 const ParamLabelsDisplay = ({ params }: ParamDisplayProps) => (
@@ -93,7 +110,10 @@ const TomeAccordion = (props: Props) => {
                 </h2>
                 {tome.eldritch && (
                     <AccordionPanel pb={2} pl={10} pr={4}>
-                        <CodeBlock code={tome.eldritch} language="python" />
+                        <>
+                            {showParamValues && hasParams && <ParamCodeBlock params={params} />}
+                            <CodeBlock code={tome.eldritch} language="python" />
+                        </>
                     </AccordionPanel>
                 )}
             </AccordionItem>

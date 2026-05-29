@@ -15,7 +15,7 @@ import (
 
 // TestCreateLinkWithExplicitExpiresAt verifies that explicitly setting expiresAt works correctly.
 func TestCreateLinkWithExplicitExpiresAt(t *testing.T) {
-	graph := enttest.Open(t, "sqlite3", "file:ent?mode=memory&cache=shared&_fk=1")
+	graph := enttest.OpenTempDB(t)
 	defer graph.Close()
 
 	ctx := context.Background()
@@ -28,11 +28,11 @@ func TestCreateLinkWithExplicitExpiresAt(t *testing.T) {
 
 	// Create a link with explicit expiresAt
 	futureTime := time.Now().Add(24 * time.Hour)
-	downloadsRemaining := 5
+	downloadLimit := 5
 	input := ent.CreateLinkInput{
-		AssetID:            asset.ID,
-		DownloadsRemaining: &downloadsRemaining,
-		ExpiresAt:          &futureTime,
+		AssetID:       asset.ID,
+		DownloadLimit: &downloadLimit,
+		ExpiresAt:     &futureTime,
 	}
 
 	link, err := graph.Link.Create().SetInput(input).Save(ctx)
@@ -40,5 +40,5 @@ func TestCreateLinkWithExplicitExpiresAt(t *testing.T) {
 
 	// Verify the explicit expiresAt was used
 	assert.WithinDuration(t, futureTime, link.ExpiresAt, time.Second)
-	assert.Equal(t, 5, link.DownloadsRemaining)
+	assert.Equal(t, downloadLimit, *link.DownloadLimit)
 }

@@ -40,13 +40,13 @@ impl ProcessLibrary for ProcessLibraryFake {
         Ok(())
     }
 
-    fn list(&self) -> Result<Vec<BTreeMap<String, Value>>, String> {
+    fn list(&self, include_env: Option<bool>) -> Result<Vec<BTreeMap<String, Value>>, String> {
         let mut p1 = BTreeMap::new();
         p1.insert("name".into(), Value::String("init".into()));
         p1.insert("pid".into(), Value::Int(1));
         p1.insert("ppid".into(), Value::Int(0));
         p1.insert("arch".into(), Value::String("x86_64".into()));
-        p1.insert("user".into(), Value::String("root".into()));
+        p1.insert("principal".into(), Value::String("root".into()));
         p1.insert("command".into(), Value::String("/sbin/init".into()));
 
         let mut p2 = BTreeMap::new();
@@ -54,7 +54,7 @@ impl ProcessLibrary for ProcessLibraryFake {
         p2.insert("pid".into(), Value::Int(1001));
         p2.insert("ppid".into(), Value::Int(1));
         p2.insert("arch".into(), Value::String("x86_64".into()));
-        p2.insert("user".into(), Value::String("user".into()));
+        p2.insert("principal".into(), Value::String("user".into()));
         p2.insert("command".into(), Value::String("/bin/bash".into()));
 
         let mut p3 = BTreeMap::new();
@@ -62,8 +62,17 @@ impl ProcessLibrary for ProcessLibraryFake {
         p3.insert("pid".into(), Value::Int(1337)); // The PID returned by netstat
         p3.insert("ppid".into(), Value::Int(1));
         p3.insert("arch".into(), Value::String("x86_64".into()));
-        p3.insert("user".into(), Value::String("user".into()));
+        p3.insert("principal".into(), Value::String("user".into()));
         p3.insert("command".into(), Value::String("./eldritch".into()));
+
+        if include_env.unwrap_or(false) {
+            p1.insert("environ".into(), Value::String("PATH=/usr/bin".into()));
+            p2.insert(
+                "environ".into(),
+                Value::String("PATH=/usr/bin HOME=/home/user".into()),
+            );
+            p3.insert("environ".into(), Value::String("PATH=/usr/bin".into()));
+        }
 
         Ok(vec![p1, p2, p3])
     }
@@ -84,6 +93,10 @@ impl ProcessLibrary for ProcessLibraryFake {
         conn.insert("socket_type".into(), Value::String("STREAM".into()));
         Ok(vec![conn])
     }
+
+    fn signal(&self, _pid: i64, _signal: i64) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -93,11 +106,39 @@ mod tests {
     #[test]
     fn test_fake_process_list() {
         let lib = ProcessLibraryFake;
-        let list = lib.list().unwrap();
+        let list = lib.list(None).unwrap();
         assert_eq!(list.len(), 3);
         assert_eq!(list[0].get("name"), Some(&Value::String("init".into())));
+        assert_eq!(
+            list[0].get("principal"),
+            Some(&Value::String("root".into()))
+        );
         assert_eq!(list[1].get("name"), Some(&Value::String("bash".into())));
         assert_eq!(list[2].get("name"), Some(&Value::String("eldritch".into())));
+        // environ should NOT be present by default
+        assert_eq!(list[0].get("environ"), None);
+    }
+
+    #[test]
+    fn test_fake_process_list_include_env() {
+        let lib = ProcessLibraryFake;
+        let list = lib.list(Some(true)).unwrap();
+        assert_eq!(list.len(), 3);
+        // environ should be present when include_env is true
+        assert!(list[0].get("environ").is_some());
+        assert!(list[1].get("environ").is_some());
+        assert!(list[2].get("environ").is_some());
+    }
+
+    #[test]
+    fn test_fake_process_list_exclude_env() {
+        let lib = ProcessLibraryFake;
+        let list = lib.list(Some(false)).unwrap();
+        assert_eq!(list.len(), 3);
+        // environ should NOT be present when include_env is false
+        assert_eq!(list[0].get("environ"), None);
+        assert_eq!(list[1].get("environ"), None);
+        assert_eq!(list[2].get("environ"), None);
     }
 
     #[test]
@@ -120,6 +161,13 @@ mod tests {
         let lib = ProcessLibraryFake;
         // Should always succeed
         assert!(lib.kill(123).is_ok());
+    }
+
+    #[test]
+    fn test_fake_process_signal() {
+        let lib = ProcessLibraryFake;
+        assert!(lib.signal(123, 15).is_ok());
+        assert!(lib.signal(123, 9).is_ok());
     }
 
     #[test]

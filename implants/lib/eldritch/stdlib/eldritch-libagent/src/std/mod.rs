@@ -3,9 +3,9 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use eldritch_agent::Context;
 use eldritch_core::Value;
 use eldritch_macros::eldritch_library_impl;
-use pb::c2::TaskContext;
 
 use crate::{CredentialWrapper, FileWrapper, ProcessListWrapper, TaskWrapper};
 
@@ -23,6 +23,7 @@ pub mod report_credential_impl;
 pub mod report_file_impl;
 pub mod report_process_list_impl;
 pub mod report_task_output_impl;
+pub mod reset_transport_impl;
 pub mod set_callback_interval_impl;
 pub mod set_callback_uri_impl;
 pub mod stop_task_impl;
@@ -32,23 +33,20 @@ pub mod terminate_impl;
 #[eldritch_library_impl(AgentLibrary)]
 pub struct StdAgentLibrary {
     pub agent: Arc<dyn Agent>,
-    pub task_context: TaskContext,
+    pub context: Context,
 }
 
 impl core::fmt::Debug for StdAgentLibrary {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("StdAgentLibrary")
-            .field("task_context", &self.task_context)
+            .field("context", &self.context)
             .finish()
     }
 }
 
 impl StdAgentLibrary {
-    pub fn new(agent: Arc<dyn Agent>, task_context: TaskContext) -> Self {
-        Self {
-            agent,
-            task_context,
-        }
+    pub fn new(agent: Arc<dyn Agent>, context: Context) -> Self {
+        Self { agent, context }
     }
 }
 
@@ -67,25 +65,25 @@ impl AgentLibrary for StdAgentLibrary {
 
     // Interactivity
     fn fetch_asset(&self, name: String) -> Result<Vec<u8>, String> {
-        fetch_asset_impl::fetch_asset(self.agent.clone(), self.task_context.clone(), name)
+        fetch_asset_impl::fetch_asset(self.agent.clone(), self.context.clone(), name)
     }
 
     fn report_credential(&self, credential: CredentialWrapper) -> Result<(), String> {
         report_credential_impl::report_credential(
             self.agent.clone(),
-            self.task_context.clone(),
+            self.context.clone(),
             credential,
         )
     }
 
     fn report_file(&self, file: FileWrapper) -> Result<(), String> {
-        report_file_impl::report_file(self.agent.clone(), self.task_context.clone(), file)
+        report_file_impl::report_file(self.agent.clone(), self.context.clone(), file)
     }
 
     fn report_process_list(&self, list: ProcessListWrapper) -> Result<(), String> {
         report_process_list_impl::report_process_list(
             self.agent.clone(),
-            self.task_context.clone(),
+            self.context.clone(),
             list,
         )
     }
@@ -93,7 +91,7 @@ impl AgentLibrary for StdAgentLibrary {
     fn report_task_output(&self, output: String, error: Option<String>) -> Result<(), String> {
         report_task_output_impl::report_task_output(
             self.agent.clone(),
-            self.task_context.clone(),
+            self.context.clone(),
             output,
             error,
         )
@@ -106,6 +104,10 @@ impl AgentLibrary for StdAgentLibrary {
     // Agent Configuration
     fn get_transport(&self) -> Result<String, String> {
         get_transport_impl::get_transport(self.agent.clone())
+    }
+
+    fn reset_transport(&self) -> Result<(), String> {
+        reset_transport_impl::reset_transport(self.agent.clone())
     }
 
     fn list_transports(&self) -> Result<Vec<String>, String> {

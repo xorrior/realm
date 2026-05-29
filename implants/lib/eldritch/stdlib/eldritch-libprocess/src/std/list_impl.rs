@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use eldritch_core::Value;
 use sysinfo::{PidExt, ProcessExt, System, SystemExt, UserExt};
 
-pub fn list() -> Result<Vec<BTreeMap<String, Value>>, String> {
+pub fn list(include_env: Option<bool>) -> Result<Vec<BTreeMap<String, Value>>, String> {
     if !System::IS_SUPPORTED {
         return Err("System not supported".to_string());
     }
@@ -34,7 +34,10 @@ pub fn list() -> Result<Vec<BTreeMap<String, Value>>, String> {
             .and_then(|uid| sys.get_user_by_id(uid))
             .map(|u| u.name())
             .unwrap_or("???");
-        map.insert("username".to_string(), Value::String(user_name.to_string()));
+        map.insert(
+            "principal".to_string(),
+            Value::String(user_name.to_string()),
+        );
 
         map.insert(
             "path".to_string(),
@@ -48,13 +51,19 @@ pub fn list() -> Result<Vec<BTreeMap<String, Value>>, String> {
             "cwd".to_string(),
             Value::String(process.cwd().to_string_lossy().into_owned()),
         );
-        map.insert(
-            "environ".to_string(),
-            Value::String(process.environ().join(" ")),
-        );
+        if include_env.unwrap_or(false) {
+            map.insert(
+                "environ".to_string(),
+                Value::String(process.environ().join(" ")),
+            );
+        }
         map.insert(
             "name".to_string(),
             Value::String(process.name().to_string()),
+        );
+        map.insert(
+            "start_time".to_string(),
+            Value::Int(process.start_time() as i64),
         );
 
         list.push(map);
@@ -71,7 +80,7 @@ mod tests {
     #[test]
     fn test_std_process_list() {
         let lib = StdProcessLibrary;
-        let list = lib.list().unwrap();
+        let list = lib.list(None).unwrap();
         assert!(!list.is_empty());
 
         // Ensure current process is in list
@@ -91,8 +100,53 @@ mod tests {
             assert!(process.contains_key("ppid"));
             assert!(process.contains_key("name"));
             assert!(process.contains_key("path"));
-            assert!(process.contains_key("username"));
+            assert!(process.contains_key("principal"));
             assert!(process.contains_key("status"));
+            assert!(process.contains_key("start_time"));
+            // environ should NOT be present by default
+            assert!(!process.contains_key("environ"));
+        }
+    }
+
+    #[test]
+    fn test_std_process_list_include_env() {
+        let lib = StdProcessLibrary;
+        let list = lib.list(Some(true)).unwrap();
+        assert!(!list.is_empty());
+
+        let my_pid = ::std::process::id() as i64;
+        let my_process = list.iter().find(|p| {
+            if let Some(Value::Int(pid)) = p.get("pid") {
+                *pid == my_pid
+            } else {
+                false
+            }
+        });
+        assert!(my_process.is_some(), "Current process not found in list");
+
+        if let Some(process) = my_process {
+            assert!(process.contains_key("environ"));
+        }
+    }
+
+    #[test]
+    fn test_std_process_list_exclude_env() {
+        let lib = StdProcessLibrary;
+        let list = lib.list(Some(false)).unwrap();
+        assert!(!list.is_empty());
+
+        let my_pid = ::std::process::id() as i64;
+        let my_process = list.iter().find(|p| {
+            if let Some(Value::Int(pid)) = p.get("pid") {
+                *pid == my_pid
+            } else {
+                false
+            }
+        });
+        assert!(my_process.is_some(), "Current process not found in list");
+
+        if let Some(process) = my_process {
+            assert!(!process.contains_key("environ"));
         }
     }
 }

@@ -6,11 +6,32 @@ import (
 	"entgo.io/ent/dialect/sql"
 )
 
+// Adventure is the predicate function for adventure builders.
+type Adventure func(*sql.Selector)
+
 // Asset is the predicate function for asset builders.
 type Asset func(*sql.Selector)
 
 // Beacon is the predicate function for beacon builders.
 type Beacon func(*sql.Selector)
+
+// BeaconHistory is the predicate function for beaconhistory builders.
+type BeaconHistory func(*sql.Selector)
+
+// BuildProfile is the predicate function for buildprofile builders.
+type BuildProfile func(*sql.Selector)
+
+// BuildTask is the predicate function for buildtask builders.
+type BuildTask func(*sql.Selector)
+
+// Builder is the predicate function for builder builders.
+type Builder func(*sql.Selector)
+
+// DeviceAuth is the predicate function for deviceauth builders.
+type DeviceAuth func(*sql.Selector)
+
+// Event is the predicate function for event builders.
+type Event func(*sql.Selector)
 
 // Host is the predicate function for host builders.
 type Host func(*sql.Selector)
@@ -27,6 +48,9 @@ type HostProcess func(*sql.Selector)
 // Link is the predicate function for link builders.
 type Link func(*sql.Selector)
 
+// Notification is the predicate function for notification builders.
+type Notification func(*sql.Selector)
+
 // Portal is the predicate function for portal builders.
 type Portal func(*sql.Selector)
 
@@ -36,8 +60,20 @@ type Quest func(*sql.Selector)
 // Repository is the predicate function for repository builders.
 type Repository func(*sql.Selector)
 
+// ScheduledTask is the predicate function for scheduledtask builders.
+type ScheduledTask func(*sql.Selector)
+
+// Screenshot is the predicate function for screenshot builders.
+type Screenshot func(*sql.Selector)
+
 // Shell is the predicate function for shell builders.
 type Shell func(*sql.Selector)
+
+// ShellPivot is the predicate function for shellpivot builders.
+type ShellPivot func(*sql.Selector)
+
+// ShellTask is the predicate function for shelltask builders.
+type ShellTask func(*sql.Selector)
 
 // Tag is the predicate function for tag builders.
 type Tag func(*sql.Selector)

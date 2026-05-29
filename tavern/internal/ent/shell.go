@@ -45,15 +45,24 @@ type ShellEdges struct {
 	Beacon *Beacon `json:"beacon,omitempty"`
 	// User that created the shell
 	Owner *User `json:"owner,omitempty"`
+	// Portals associated with this shell
+	Portals []*Portal `json:"portals,omitempty"`
 	// Users that are currently using the shell
 	ActiveUsers []*User `json:"active_users,omitempty"`
+	// Tasks executed in this shell
+	ShellTasks []*ShellTask `json:"shell_tasks,omitempty"`
+	// Pivots associated with this shell
+	Pivots []*ShellPivot `json:"pivots,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [4]bool
+	loadedTypes [7]bool
 	// totalCount holds the count of the edges above.
-	totalCount [4]map[string]int
+	totalCount [7]map[string]int
 
+	namedPortals     map[string][]*Portal
 	namedActiveUsers map[string][]*User
+	namedShellTasks  map[string][]*ShellTask
+	namedPivots      map[string][]*ShellPivot
 }
 
 // TaskOrErr returns the Task value or an error if the edge
@@ -89,13 +98,40 @@ func (e ShellEdges) OwnerOrErr() (*User, error) {
 	return nil, &NotLoadedError{edge: "owner"}
 }
 
+// PortalsOrErr returns the Portals value or an error if the edge
+// was not loaded in eager-loading.
+func (e ShellEdges) PortalsOrErr() ([]*Portal, error) {
+	if e.loadedTypes[3] {
+		return e.Portals, nil
+	}
+	return nil, &NotLoadedError{edge: "portals"}
+}
+
 // ActiveUsersOrErr returns the ActiveUsers value or an error if the edge
 // was not loaded in eager-loading.
 func (e ShellEdges) ActiveUsersOrErr() ([]*User, error) {
-	if e.loadedTypes[3] {
+	if e.loadedTypes[4] {
 		return e.ActiveUsers, nil
 	}
 	return nil, &NotLoadedError{edge: "active_users"}
+}
+
+// ShellTasksOrErr returns the ShellTasks value or an error if the edge
+// was not loaded in eager-loading.
+func (e ShellEdges) ShellTasksOrErr() ([]*ShellTask, error) {
+	if e.loadedTypes[5] {
+		return e.ShellTasks, nil
+	}
+	return nil, &NotLoadedError{edge: "shell_tasks"}
+}
+
+// PivotsOrErr returns the Pivots value or an error if the edge
+// was not loaded in eager-loading.
+func (e ShellEdges) PivotsOrErr() ([]*ShellPivot, error) {
+	if e.loadedTypes[6] {
+		return e.Pivots, nil
+	}
+	return nil, &NotLoadedError{edge: "pivots"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -209,9 +245,24 @@ func (s *Shell) QueryOwner() *UserQuery {
 	return NewShellClient(s.config).QueryOwner(s)
 }
 
+// QueryPortals queries the "portals" edge of the Shell entity.
+func (s *Shell) QueryPortals() *PortalQuery {
+	return NewShellClient(s.config).QueryPortals(s)
+}
+
 // QueryActiveUsers queries the "active_users" edge of the Shell entity.
 func (s *Shell) QueryActiveUsers() *UserQuery {
 	return NewShellClient(s.config).QueryActiveUsers(s)
+}
+
+// QueryShellTasks queries the "shell_tasks" edge of the Shell entity.
+func (s *Shell) QueryShellTasks() *ShellTaskQuery {
+	return NewShellClient(s.config).QueryShellTasks(s)
+}
+
+// QueryPivots queries the "pivots" edge of the Shell entity.
+func (s *Shell) QueryPivots() *ShellPivotQuery {
+	return NewShellClient(s.config).QueryPivots(s)
 }
 
 // Update returns a builder for updating this Shell.
@@ -252,6 +303,30 @@ func (s *Shell) String() string {
 	return builder.String()
 }
 
+// NamedPortals returns the Portals named value or an error if the edge was not
+// loaded in eager-loading with this name.
+func (s *Shell) NamedPortals(name string) ([]*Portal, error) {
+	if s.Edges.namedPortals == nil {
+		return nil, &NotLoadedError{edge: name}
+	}
+	nodes, ok := s.Edges.namedPortals[name]
+	if !ok {
+		return nil, &NotLoadedError{edge: name}
+	}
+	return nodes, nil
+}
+
+func (s *Shell) appendNamedPortals(name string, edges ...*Portal) {
+	if s.Edges.namedPortals == nil {
+		s.Edges.namedPortals = make(map[string][]*Portal)
+	}
+	if len(edges) == 0 {
+		s.Edges.namedPortals[name] = []*Portal{}
+	} else {
+		s.Edges.namedPortals[name] = append(s.Edges.namedPortals[name], edges...)
+	}
+}
+
 // NamedActiveUsers returns the ActiveUsers named value or an error if the edge was not
 // loaded in eager-loading with this name.
 func (s *Shell) NamedActiveUsers(name string) ([]*User, error) {
@@ -273,6 +348,54 @@ func (s *Shell) appendNamedActiveUsers(name string, edges ...*User) {
 		s.Edges.namedActiveUsers[name] = []*User{}
 	} else {
 		s.Edges.namedActiveUsers[name] = append(s.Edges.namedActiveUsers[name], edges...)
+	}
+}
+
+// NamedShellTasks returns the ShellTasks named value or an error if the edge was not
+// loaded in eager-loading with this name.
+func (s *Shell) NamedShellTasks(name string) ([]*ShellTask, error) {
+	if s.Edges.namedShellTasks == nil {
+		return nil, &NotLoadedError{edge: name}
+	}
+	nodes, ok := s.Edges.namedShellTasks[name]
+	if !ok {
+		return nil, &NotLoadedError{edge: name}
+	}
+	return nodes, nil
+}
+
+func (s *Shell) appendNamedShellTasks(name string, edges ...*ShellTask) {
+	if s.Edges.namedShellTasks == nil {
+		s.Edges.namedShellTasks = make(map[string][]*ShellTask)
+	}
+	if len(edges) == 0 {
+		s.Edges.namedShellTasks[name] = []*ShellTask{}
+	} else {
+		s.Edges.namedShellTasks[name] = append(s.Edges.namedShellTasks[name], edges...)
+	}
+}
+
+// NamedPivots returns the Pivots named value or an error if the edge was not
+// loaded in eager-loading with this name.
+func (s *Shell) NamedPivots(name string) ([]*ShellPivot, error) {
+	if s.Edges.namedPivots == nil {
+		return nil, &NotLoadedError{edge: name}
+	}
+	nodes, ok := s.Edges.namedPivots[name]
+	if !ok {
+		return nil, &NotLoadedError{edge: name}
+	}
+	return nodes, nil
+}
+
+func (s *Shell) appendNamedPivots(name string, edges ...*ShellPivot) {
+	if s.Edges.namedPivots == nil {
+		s.Edges.namedPivots = make(map[string][]*ShellPivot)
+	}
+	if len(edges) == 0 {
+		s.Edges.namedPivots[name] = []*ShellPivot{}
+	} else {
+		s.Edges.namedPivots[name] = append(s.Edges.namedPivots[name], edges...)
 	}
 }
 

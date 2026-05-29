@@ -1,21 +1,23 @@
 [package]
 name = "eldritch-libassets"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
 eldritch-core = { workspace = true }
 eldritch-macros = { workspace = true }
-eldritch-agent = { workspace = true }
-pb = { workspace = true }
+eldritch-agent = { workspace = true, optional = true }
+pb = { workspace = true, optional = true }
 anyhow = { version = "1.0" }
 rust-embed = { version = "8.0" }
+log = { workspace = true }
 
 [features]
 default = ["std", "stdlib"]
 std = ["eldritch-core/std"]
 fake_bindings = []
-stdlib = []
+stdlib = ["dep:eldritch-agent", "dep:pb"]
 
 [dev-dependencies]
+eldritch-mockagent = { path = "../../testutils/eldritch-mockagent" }
 tempfile = "3.3"

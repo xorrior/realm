@@ -1,19 +1,35 @@
 import { TabGroup, TabPanel, TabPanels } from "@headlessui/react";
+import { useSearchParams } from "react-router-dom";
 import { HostContextProvider } from "../../context/HostContext";
 import HostDetailsSection from "./components/HostDetailsSection";
 import HostTabs from "./components/HostTabs";
-import BeaconTab from "./components/BeaconTab";
-import CredentialTab from "./components/CredentialTab";
-import HostTaskTab from "./components/HostTaskTab";
-import HostBreadcrumbs from "./components/HostBreadcrumbs";
+import { CredentialTab } from "./credential-tab";
+import { HostTaskTab } from "./task-tab";
+import { BeaconTab } from "./beacon-tab";
+import { ProcessTab } from "./process-tab";
+import { FilesTab } from "./files-tab";
+import { ShellTab } from "./shell-tab";
+import { PortalTab } from "./portal-tab";
+import HostHeader from "./components/HostHeader";
+
+const TAB_NAMES = ["beacons", "tasks", "processes", "files", "credentials", "shells", "portals"] as const;
 
 const HostDetails = () => {
+    const [searchParams, setSearchParams] = useSearchParams();
+
+    const tabParam = searchParams.get("tab");
+    const selectedIndex = Math.max(0, TAB_NAMES.indexOf(tabParam as typeof TAB_NAMES[number]));
+
+    const handleTabChange = (index: number) => {
+        setSearchParams({ tab: TAB_NAMES[index] }, { replace: true });
+    };
+
     return (
         <HostContextProvider>
-            <HostBreadcrumbs />
+            <HostHeader />
             <HostDetailsSection />
             <div className="flex flex-col mt-2">
-                <TabGroup>
+                <TabGroup selectedIndex={selectedIndex} onChange={handleTabChange}>
                     <HostTabs />
                     <TabPanels>
                         <TabPanel>
@@ -23,7 +39,19 @@ const HostDetails = () => {
                             <HostTaskTab />
                         </TabPanel>
                         <TabPanel>
+                            <ProcessTab />
+                        </TabPanel>
+                        <TabPanel>
+                            <FilesTab />
+                        </TabPanel>
+                        <TabPanel>
                             <CredentialTab />
+                        </TabPanel>
+                        <TabPanel>
+                            <ShellTab />
+                        </TabPanel>
+                        <TabPanel>
+                            <PortalTab />
                         </TabPanel>
                     </TabPanels>
                 </TabGroup>

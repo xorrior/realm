@@ -15,6 +15,7 @@ import (
 	"realm.pub/tavern/internal/ent/host"
 	"realm.pub/tavern/internal/ent/hostprocess"
 	"realm.pub/tavern/internal/ent/predicate"
+	"realm.pub/tavern/internal/ent/shelltask"
 	"realm.pub/tavern/internal/ent/task"
 )
 
@@ -104,6 +105,12 @@ func (hpu *HostProcessUpdate) SetNillablePrincipal(s *string) *HostProcessUpdate
 	if s != nil {
 		hpu.SetPrincipal(*s)
 	}
+	return hpu
+}
+
+// ClearPrincipal clears the value of the "principal" field.
+func (hpu *HostProcessUpdate) ClearPrincipal() *HostProcessUpdate {
+	hpu.mutation.ClearPrincipal()
 	return hpu
 }
 
@@ -201,6 +208,33 @@ func (hpu *HostProcessUpdate) SetNillableStatus(es *epb.Process_Status) *HostPro
 	return hpu
 }
 
+// SetStartTime sets the "start_time" field.
+func (hpu *HostProcessUpdate) SetStartTime(u uint64) *HostProcessUpdate {
+	hpu.mutation.ResetStartTime()
+	hpu.mutation.SetStartTime(u)
+	return hpu
+}
+
+// SetNillableStartTime sets the "start_time" field if the given value is not nil.
+func (hpu *HostProcessUpdate) SetNillableStartTime(u *uint64) *HostProcessUpdate {
+	if u != nil {
+		hpu.SetStartTime(*u)
+	}
+	return hpu
+}
+
+// AddStartTime adds u to the "start_time" field.
+func (hpu *HostProcessUpdate) AddStartTime(u int64) *HostProcessUpdate {
+	hpu.mutation.AddStartTime(u)
+	return hpu
+}
+
+// ClearStartTime clears the value of the "start_time" field.
+func (hpu *HostProcessUpdate) ClearStartTime() *HostProcessUpdate {
+	hpu.mutation.ClearStartTime()
+	return hpu
+}
+
 // SetHostID sets the "host" edge to the Host entity by ID.
 func (hpu *HostProcessUpdate) SetHostID(id int) *HostProcessUpdate {
 	hpu.mutation.SetHostID(id)
@@ -218,9 +252,36 @@ func (hpu *HostProcessUpdate) SetTaskID(id int) *HostProcessUpdate {
 	return hpu
 }
 
+// SetNillableTaskID sets the "task" edge to the Task entity by ID if the given value is not nil.
+func (hpu *HostProcessUpdate) SetNillableTaskID(id *int) *HostProcessUpdate {
+	if id != nil {
+		hpu = hpu.SetTaskID(*id)
+	}
+	return hpu
+}
+
 // SetTask sets the "task" edge to the Task entity.
 func (hpu *HostProcessUpdate) SetTask(t *Task) *HostProcessUpdate {
 	return hpu.SetTaskID(t.ID)
+}
+
+// SetShellTaskID sets the "shell_task" edge to the ShellTask entity by ID.
+func (hpu *HostProcessUpdate) SetShellTaskID(id int) *HostProcessUpdate {
+	hpu.mutation.SetShellTaskID(id)
+	return hpu
+}
+
+// SetNillableShellTaskID sets the "shell_task" edge to the ShellTask entity by ID if the given value is not nil.
+func (hpu *HostProcessUpdate) SetNillableShellTaskID(id *int) *HostProcessUpdate {
+	if id != nil {
+		hpu = hpu.SetShellTaskID(*id)
+	}
+	return hpu
+}
+
+// SetShellTask sets the "shell_task" edge to the ShellTask entity.
+func (hpu *HostProcessUpdate) SetShellTask(s *ShellTask) *HostProcessUpdate {
+	return hpu.SetShellTaskID(s.ID)
 }
 
 // Mutation returns the HostProcessMutation object of the builder.
@@ -237,6 +298,12 @@ func (hpu *HostProcessUpdate) ClearHost() *HostProcessUpdate {
 // ClearTask clears the "task" edge to the Task entity.
 func (hpu *HostProcessUpdate) ClearTask() *HostProcessUpdate {
 	hpu.mutation.ClearTask()
+	return hpu
+}
+
+// ClearShellTask clears the "shell_task" edge to the ShellTask entity.
+func (hpu *HostProcessUpdate) ClearShellTask() *HostProcessUpdate {
+	hpu.mutation.ClearShellTask()
 	return hpu
 }
 
@@ -278,11 +345,6 @@ func (hpu *HostProcessUpdate) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (hpu *HostProcessUpdate) check() error {
-	if v, ok := hpu.mutation.Principal(); ok {
-		if err := hostprocess.PrincipalValidator(v); err != nil {
-			return &ValidationError{Name: "principal", err: fmt.Errorf(`ent: validator failed for field "HostProcess.principal": %w`, err)}
-		}
-	}
 	if v, ok := hpu.mutation.Status(); ok {
 		if err := hostprocess.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "HostProcess.status": %w`, err)}
@@ -290,9 +352,6 @@ func (hpu *HostProcessUpdate) check() error {
 	}
 	if hpu.mutation.HostCleared() && len(hpu.mutation.HostIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "HostProcess.host"`)
-	}
-	if hpu.mutation.TaskCleared() && len(hpu.mutation.TaskIDs()) > 0 {
-		return errors.New(`ent: clearing a required unique edge "HostProcess.task"`)
 	}
 	return nil
 }
@@ -330,6 +389,9 @@ func (hpu *HostProcessUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	if value, ok := hpu.mutation.Principal(); ok {
 		_spec.SetField(hostprocess.FieldPrincipal, field.TypeString, value)
 	}
+	if hpu.mutation.PrincipalCleared() {
+		_spec.ClearField(hostprocess.FieldPrincipal, field.TypeString)
+	}
 	if value, ok := hpu.mutation.Path(); ok {
 		_spec.SetField(hostprocess.FieldPath, field.TypeString, value)
 	}
@@ -356,6 +418,15 @@ func (hpu *HostProcessUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if value, ok := hpu.mutation.Status(); ok {
 		_spec.SetField(hostprocess.FieldStatus, field.TypeEnum, value)
+	}
+	if value, ok := hpu.mutation.StartTime(); ok {
+		_spec.SetField(hostprocess.FieldStartTime, field.TypeUint64, value)
+	}
+	if value, ok := hpu.mutation.AddedStartTime(); ok {
+		_spec.AddField(hostprocess.FieldStartTime, field.TypeUint64, value)
+	}
+	if hpu.mutation.StartTimeCleared() {
+		_spec.ClearField(hostprocess.FieldStartTime, field.TypeUint64)
 	}
 	if hpu.mutation.HostCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -408,6 +479,35 @@ func (hpu *HostProcessUpdate) sqlSave(ctx context.Context) (n int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(task.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if hpu.mutation.ShellTaskCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   hostprocess.ShellTaskTable,
+			Columns: []string{hostprocess.ShellTaskColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shelltask.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := hpu.mutation.ShellTaskIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   hostprocess.ShellTaskTable,
+			Columns: []string{hostprocess.ShellTaskColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shelltask.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {
@@ -511,6 +611,12 @@ func (hpuo *HostProcessUpdateOne) SetNillablePrincipal(s *string) *HostProcessUp
 	return hpuo
 }
 
+// ClearPrincipal clears the value of the "principal" field.
+func (hpuo *HostProcessUpdateOne) ClearPrincipal() *HostProcessUpdateOne {
+	hpuo.mutation.ClearPrincipal()
+	return hpuo
+}
+
 // SetPath sets the "path" field.
 func (hpuo *HostProcessUpdateOne) SetPath(s string) *HostProcessUpdateOne {
 	hpuo.mutation.SetPath(s)
@@ -605,6 +711,33 @@ func (hpuo *HostProcessUpdateOne) SetNillableStatus(es *epb.Process_Status) *Hos
 	return hpuo
 }
 
+// SetStartTime sets the "start_time" field.
+func (hpuo *HostProcessUpdateOne) SetStartTime(u uint64) *HostProcessUpdateOne {
+	hpuo.mutation.ResetStartTime()
+	hpuo.mutation.SetStartTime(u)
+	return hpuo
+}
+
+// SetNillableStartTime sets the "start_time" field if the given value is not nil.
+func (hpuo *HostProcessUpdateOne) SetNillableStartTime(u *uint64) *HostProcessUpdateOne {
+	if u != nil {
+		hpuo.SetStartTime(*u)
+	}
+	return hpuo
+}
+
+// AddStartTime adds u to the "start_time" field.
+func (hpuo *HostProcessUpdateOne) AddStartTime(u int64) *HostProcessUpdateOne {
+	hpuo.mutation.AddStartTime(u)
+	return hpuo
+}
+
+// ClearStartTime clears the value of the "start_time" field.
+func (hpuo *HostProcessUpdateOne) ClearStartTime() *HostProcessUpdateOne {
+	hpuo.mutation.ClearStartTime()
+	return hpuo
+}
+
 // SetHostID sets the "host" edge to the Host entity by ID.
 func (hpuo *HostProcessUpdateOne) SetHostID(id int) *HostProcessUpdateOne {
 	hpuo.mutation.SetHostID(id)
@@ -622,9 +755,36 @@ func (hpuo *HostProcessUpdateOne) SetTaskID(id int) *HostProcessUpdateOne {
 	return hpuo
 }
 
+// SetNillableTaskID sets the "task" edge to the Task entity by ID if the given value is not nil.
+func (hpuo *HostProcessUpdateOne) SetNillableTaskID(id *int) *HostProcessUpdateOne {
+	if id != nil {
+		hpuo = hpuo.SetTaskID(*id)
+	}
+	return hpuo
+}
+
 // SetTask sets the "task" edge to the Task entity.
 func (hpuo *HostProcessUpdateOne) SetTask(t *Task) *HostProcessUpdateOne {
 	return hpuo.SetTaskID(t.ID)
+}
+
+// SetShellTaskID sets the "shell_task" edge to the ShellTask entity by ID.
+func (hpuo *HostProcessUpdateOne) SetShellTaskID(id int) *HostProcessUpdateOne {
+	hpuo.mutation.SetShellTaskID(id)
+	return hpuo
+}
+
+// SetNillableShellTaskID sets the "shell_task" edge to the ShellTask entity by ID if the given value is not nil.
+func (hpuo *HostProcessUpdateOne) SetNillableShellTaskID(id *int) *HostProcessUpdateOne {
+	if id != nil {
+		hpuo = hpuo.SetShellTaskID(*id)
+	}
+	return hpuo
+}
+
+// SetShellTask sets the "shell_task" edge to the ShellTask entity.
+func (hpuo *HostProcessUpdateOne) SetShellTask(s *ShellTask) *HostProcessUpdateOne {
+	return hpuo.SetShellTaskID(s.ID)
 }
 
 // Mutation returns the HostProcessMutation object of the builder.
@@ -641,6 +801,12 @@ func (hpuo *HostProcessUpdateOne) ClearHost() *HostProcessUpdateOne {
 // ClearTask clears the "task" edge to the Task entity.
 func (hpuo *HostProcessUpdateOne) ClearTask() *HostProcessUpdateOne {
 	hpuo.mutation.ClearTask()
+	return hpuo
+}
+
+// ClearShellTask clears the "shell_task" edge to the ShellTask entity.
+func (hpuo *HostProcessUpdateOne) ClearShellTask() *HostProcessUpdateOne {
+	hpuo.mutation.ClearShellTask()
 	return hpuo
 }
 
@@ -695,11 +861,6 @@ func (hpuo *HostProcessUpdateOne) defaults() {
 
 // check runs all checks and user-defined validators on the builder.
 func (hpuo *HostProcessUpdateOne) check() error {
-	if v, ok := hpuo.mutation.Principal(); ok {
-		if err := hostprocess.PrincipalValidator(v); err != nil {
-			return &ValidationError{Name: "principal", err: fmt.Errorf(`ent: validator failed for field "HostProcess.principal": %w`, err)}
-		}
-	}
 	if v, ok := hpuo.mutation.Status(); ok {
 		if err := hostprocess.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "HostProcess.status": %w`, err)}
@@ -707,9 +868,6 @@ func (hpuo *HostProcessUpdateOne) check() error {
 	}
 	if hpuo.mutation.HostCleared() && len(hpuo.mutation.HostIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "HostProcess.host"`)
-	}
-	if hpuo.mutation.TaskCleared() && len(hpuo.mutation.TaskIDs()) > 0 {
-		return errors.New(`ent: clearing a required unique edge "HostProcess.task"`)
 	}
 	return nil
 }
@@ -764,6 +922,9 @@ func (hpuo *HostProcessUpdateOne) sqlSave(ctx context.Context) (_node *HostProce
 	if value, ok := hpuo.mutation.Principal(); ok {
 		_spec.SetField(hostprocess.FieldPrincipal, field.TypeString, value)
 	}
+	if hpuo.mutation.PrincipalCleared() {
+		_spec.ClearField(hostprocess.FieldPrincipal, field.TypeString)
+	}
 	if value, ok := hpuo.mutation.Path(); ok {
 		_spec.SetField(hostprocess.FieldPath, field.TypeString, value)
 	}
@@ -790,6 +951,15 @@ func (hpuo *HostProcessUpdateOne) sqlSave(ctx context.Context) (_node *HostProce
 	}
 	if value, ok := hpuo.mutation.Status(); ok {
 		_spec.SetField(hostprocess.FieldStatus, field.TypeEnum, value)
+	}
+	if value, ok := hpuo.mutation.StartTime(); ok {
+		_spec.SetField(hostprocess.FieldStartTime, field.TypeUint64, value)
+	}
+	if value, ok := hpuo.mutation.AddedStartTime(); ok {
+		_spec.AddField(hostprocess.FieldStartTime, field.TypeUint64, value)
+	}
+	if hpuo.mutation.StartTimeCleared() {
+		_spec.ClearField(hostprocess.FieldStartTime, field.TypeUint64)
 	}
 	if hpuo.mutation.HostCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -842,6 +1012,35 @@ func (hpuo *HostProcessUpdateOne) sqlSave(ctx context.Context) (_node *HostProce
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(task.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if hpuo.mutation.ShellTaskCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   hostprocess.ShellTaskTable,
+			Columns: []string{hostprocess.ShellTaskColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shelltask.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := hpuo.mutation.ShellTaskIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   hostprocess.ShellTaskTable,
+			Columns: []string{hostprocess.ShellTaskColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(shelltask.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {

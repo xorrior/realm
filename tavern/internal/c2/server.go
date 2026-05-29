@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 	"realm.pub/tavern/internal/c2/c2pb"
 	"realm.pub/tavern/internal/ent"
 	"realm.pub/tavern/internal/http/stream"
@@ -30,8 +32,8 @@ type Server struct {
 	c2pb.UnimplementedC2Server
 }
 
-func New(graph *ent.Client, mux *stream.Mux, portalMux *mux.Mux, jwtPublicKey ed25519.PublicKey, jwtPrivateKey ed25519.PrivateKey) *Server {
-	return &Server{
+func New(graph *ent.Client, mux *stream.Mux, portalMux *mux.Mux, jwtPublicKey ed25519.PublicKey, jwtPrivateKey ed25519.PrivateKey, opts ...Option) *Server {
+	srv := &Server{
 		MaxFileChunkSize: 1024 * 1024, // 1 MB
 		graph:            graph,
 		mux:              mux,
@@ -39,7 +41,14 @@ func New(graph *ent.Client, mux *stream.Mux, portalMux *mux.Mux, jwtPublicKey ed
 		jwtPrivateKey:    jwtPrivateKey,
 		jwtPublicKey:     jwtPublicKey,
 	}
+	for _, opt := range opts {
+		opt(srv)
+	}
+	return srv
 }
+
+// Option configures a C2 Server.
+type Option func(*Server)
 
 func getRemoteIP(ctx context.Context) string {
 	p, ok := peer.FromContext(ctx)
@@ -111,19 +120,14 @@ func (srv *Server) ValidateJWT(jwttoken string) error {
 	token, err := jwt.Parse(jwttoken, func(token *jwt.Token) (any, error) {
 		// 1. Verify the signing method is EdDSA
 		if _, ok := token.Method.(*jwt.SigningMethodEd25519); !ok {
-			// TODO: Uncomment with imixv1 delete
-			// return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			slog.Warn(fmt.Sprintf("unexpected signing method: %v", token.Header["alg"]))
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		// 2. Return the PUBLIC key for verification
 		return srv.jwtPublicKey, nil
 	})
 
 	if err != nil || !token.Valid {
-		// TODO: Uncomment with imixv1 delete
-		// return status.Errorf(codes.PermissionDenied, "invalid token: %v", err)
-		slog.Warn(fmt.Sprintf("invalid token: %v", err))
-		return nil
+		return status.Errorf(codes.PermissionDenied, "invalid token: %v", err)
 	}
 
 	slog.Info(fmt.Sprintf("received valid JWT: %s", jwttoken))

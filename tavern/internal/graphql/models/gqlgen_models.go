@@ -9,8 +9,44 @@ import (
 	"strconv"
 	"time"
 
+	"realm.pub/tavern/internal/builder/builderpb"
 	"realm.pub/tavern/internal/c2/c2pb"
+	"realm.pub/tavern/internal/ent"
+	"realm.pub/tavern/internal/ent/tome"
 )
+
+type BeaconTimelineBucket struct {
+	Count          int                         `json:"count"`
+	CallbackCount  int                         `json:"callbackCount"`
+	StartTimestamp time.Time                   `json:"startTimestamp"`
+	GroupByHosts   []*BeaconTimelineHostBucket `json:"groupByHosts"`
+}
+
+type BeaconTimelineHostBucket struct {
+	Host          *ent.Host `json:"host"`
+	Count         int       `json:"count"`
+	CallbackCount int       `json:"callbackCount"`
+}
+
+// Input for a tome configuration in a build profile.
+type BuildProfileTomeInput struct {
+	// The ID of the tome to include.
+	TomeID int `json:"tomeID"`
+	// JSON-encoded parameters for the tome.
+	Params string `json:"params"`
+}
+
+// Input for a single transport configuration.
+type BuildProfileTransportInput struct {
+	// The URI for the IMIX agent.
+	URI string `json:"uri"`
+	// The callback interval in seconds.
+	Interval int `json:"interval"`
+	// The transport type.
+	Type c2pb.Transport_Type `json:"type"`
+	// Extra transport configuration.
+	Extra *string `json:"extra,omitempty"`
+}
 
 type ClaimTasksInput struct {
 	// The identity the beacon is authenticated as (e.g. 'root')
@@ -27,6 +63,52 @@ type ClaimTasksInput struct {
 	HostIdentifier string `json:"hostIdentifier"`
 	// Name of the agent program the beacon is running as (e.g. 'imix')
 	AgentIdentifier string `json:"agentIdentifier"`
+}
+
+// Input for creating a new build profile.
+type CreateBuildProfileInput struct {
+	// The name of the build profile.
+	Name string `json:"name"`
+	// A user facing build profile description.
+	Description string `json:"description"`
+	// List of transport configurations. Defaults to a single gRPC transport at http://127.0.0.1:8000.
+	Transports []*BuildProfileTransportInput `json:"transports,omitempty"`
+	// Bash script to run before the build command.
+	Prebuildscript string `json:"prebuildscript"`
+	// Bash script to run before the prebuild script.
+	Setupscript string `json:"setupscript"`
+	// Bash script to run after the build command.
+	Postbuildscript string `json:"postbuildscript"`
+	// List of tomes to include in builds using this profile.
+	Tomes []*BuildProfileTomeInput `json:"tomes,omitempty"`
+	// JSON-encoded arbitrary data to be passed to the agent execution environment via IMIX_UNIQUE.
+	Unique *string `json:"unique,omitempty"`
+}
+
+// Input for creating a new build task.
+type CreateBuildTaskInput struct {
+	// The target operating system for the build.
+	TargetOs c2pb.Host_Platform `json:"targetOS"`
+	// The output format for the build. Defaults to BIN.
+	TargetFormat *builderpb.TargetFormat `json:"targetFormat,omitempty"`
+	// Docker container image name to use for the build. Defaults to spellshift/devcontainer:main.
+	BuildImage *string `json:"buildImage,omitempty"`
+	// ID of the build profile to use. Transports, preBuildScript, and postBuildScript default to the profile's values unless explicitly overridden.
+	ProfileID int `json:"profileID"`
+	// List of transport configurations. Overrides profile transports if both are set. Defaults to a single gRPC transport at http://127.0.0.1:8000.
+	Transports []*BuildProfileTransportInput `json:"transports,omitempty"`
+	// List of tomes to embed in the agent.
+	Tomes []*BuildProfileTomeInput `json:"tomes,omitempty"`
+	// Path inside the build container to extract the artifact from. Defaults to the derived path based on target OS.
+	ArtifactPath *string `json:"artifactPath,omitempty"`
+	// Script to run during setup phase. Overrides profile setupScript if both are set.
+	SetupScript *string `json:"setupScript,omitempty"`
+	// Script to run before the build command. Overrides profile preBuildScript if both are set.
+	PreBuildScript *string `json:"preBuildScript,omitempty"`
+	// Script to run after the build command. Overrides profile postBuildScript if both are set.
+	PostBuildScript *string `json:"postBuildScript,omitempty"`
+	// JSON-encoded arbitrary data to be passed to the agent execution environment via IMIX_UNIQUE.
+	Unique *string `json:"unique,omitempty"`
 }
 
 type CreateUserInput struct {
@@ -46,6 +128,33 @@ type ImportRepositoryInput struct {
 	IncludeDirs []string `json:"includeDirs,omitempty"`
 }
 
+type Metrics struct {
+	QuestTimelineChart  []*QuestTimelineBucket  `json:"questTimelineChart"`
+	BeaconTimelineChart []*BeaconTimelineBucket `json:"beaconTimelineChart"`
+	TasksByTome         []*TomeTaskMetrics      `json:"tasksByTome"`
+}
+
+type QuestTimelineBucket struct {
+	Count          int                          `json:"count"`
+	StartTimestamp time.Time                    `json:"startTimestamp"`
+	GroupByTactic  []*QuestTimelineTacticBucket `json:"groupByTactic"`
+}
+
+type QuestTimelineTacticBucket struct {
+	Tactic tome.Tactic `json:"tactic"`
+	Count  int         `json:"count"`
+}
+
+// Output returned when registering a new builder.
+type RegisterBuilderOutput struct {
+	// The created builder entity.
+	Builder *ent.Builder `json:"builder"`
+	// mTLS certificate PEM bundle for the builder to authenticate.
+	MtlsCert string `json:"mtlsCert"`
+	// YAML-formatted configuration for the builder.
+	Config string `json:"config"`
+}
+
 type SubmitTaskResultInput struct {
 	// ID of the task to submit results for.
 	TaskID int `json:"taskID"`
@@ -58,6 +167,24 @@ type SubmitTaskResultInput struct {
 	Output string `json:"output"`
 	// Error message captured as the result of task execution failure.
 	Error *string `json:"error,omitempty"`
+}
+
+type TaskDiff struct {
+	Ids            []int            `json:"ids"`
+	Output         *string          `json:"output,omitempty"`
+	Error          *string          `json:"error,omitempty"`
+	StructuredData []StructuredData `json:"structuredData"`
+}
+
+type TomeTaskMetrics struct {
+	Tome                      *ent.Tome `json:"tome"`
+	TasksTotal                int       `json:"tasksTotal"`
+	TasksWithErrors           int       `json:"tasksWithErrors"`
+	TasksWithNoErrors         int       `json:"tasksWithNoErrors"`
+	TasksCompleteWithNoErrors int       `json:"tasksCompleteWithNoErrors"`
+	TasksPending              int       `json:"tasksPending"`
+	TasksRunning              int       `json:"tasksRunning"`
+	TasksStale                int       `json:"tasksStale"`
 }
 
 type Role string
@@ -110,6 +237,61 @@ func (e *Role) UnmarshalJSON(b []byte) error {
 }
 
 func (e Role) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type StructuredData string
+
+const (
+	StructuredDataFile    StructuredData = "FILE"
+	StructuredDataProcess StructuredData = "PROCESS"
+)
+
+var AllStructuredData = []StructuredData{
+	StructuredDataFile,
+	StructuredDataProcess,
+}
+
+func (e StructuredData) IsValid() bool {
+	switch e {
+	case StructuredDataFile, StructuredDataProcess:
+		return true
+	}
+	return false
+}
+
+func (e StructuredData) String() string {
+	return string(e)
+}
+
+func (e *StructuredData) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = StructuredData(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid StructuredData", str)
+	}
+	return nil
+}
+
+func (e StructuredData) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *StructuredData) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e StructuredData) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

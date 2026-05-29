@@ -8,19 +8,23 @@ import { LockKeyhole, UnlockKeyhole } from "lucide-react";
 import { TomeFilterBar } from "../../components/TomeFilterBar";
 import { Tooltip } from "@chakra-ui/react";
 import { useLocation } from "react-router-dom";
+import UserFilterBar from "../../components/UserFilterBar";
 
 function getFilterFields(pathname: string): FilterFieldType[] | null {
     if (pathname.startsWith('/hosts/')) {
-        return [FilterFieldType.TOME_FIELDS, FilterFieldType.TOME_MULTI_SEARCH, FilterFieldType.QUEST_NAME, FilterFieldType.TASK_OUTPUT];
+        return [FilterFieldType.TOME_FIELDS, FilterFieldType.TOME_MULTI_SEARCH, FilterFieldType.USER, FilterFieldType.QUEST_NAME, FilterFieldType.TASK_OUTPUT];
     }
     if (pathname === '/hosts') {
         return [FilterFieldType.BEACON_FIELDS];
     }
     if (pathname === '/quests' || pathname.startsWith('/quests/')) {
-        return [FilterFieldType.BEACON_FIELDS, FilterFieldType.TOME_FIELDS, FilterFieldType.TOME_MULTI_SEARCH, FilterFieldType.QUEST_NAME, FilterFieldType.TASK_OUTPUT];
+        return [FilterFieldType.BEACON_FIELDS, FilterFieldType.TOME_FIELDS, FilterFieldType.USER, FilterFieldType.TOME_MULTI_SEARCH, FilterFieldType.QUEST_NAME, FilterFieldType.TASK_OUTPUT];
     }
     if (pathname === '/tasks' || pathname.startsWith('/tasks/')) {
-        return [FilterFieldType.BEACON_FIELDS, FilterFieldType.TOME_FIELDS, FilterFieldType.TOME_MULTI_SEARCH, FilterFieldType.TASK_OUTPUT];
+        return [FilterFieldType.BEACON_FIELDS, FilterFieldType.TOME_FIELDS, FilterFieldType.USER, FilterFieldType.TOME_MULTI_SEARCH, FilterFieldType.TASK_OUTPUT];
+    }
+    if (pathname === '/assets') {
+        return [FilterFieldType.ASSET_NAME, FilterFieldType.USER];
     }
 
     return null;
@@ -30,7 +34,7 @@ export default function FilterControls() {
     const { pathname } = useLocation();
     const fieldsToRender = getFilterFields(pathname);
 
-    const { filters, updateFilters } = useFilters();
+    const { filters, updateFilters, isLocked, setIsLocked } = useFilters();
 
     if (!fieldsToRender) return null;
 
@@ -45,9 +49,8 @@ export default function FilterControls() {
                 <div key={field}>
                     <BeaconFilterBar
                         key={field}
-                        setFiltersSelected={(newValue) => updateFilters({ 'beaconFields': newValue })}
-                        filtersSelected={filters.beaconFields}
-                        isDisabled={filters.isLocked}
+                        onChange={(newValue) => updateFilters({ beaconFields: newValue })}
+                        value={filters.beaconFields}
                     />
                 </div>
             )
@@ -57,7 +60,6 @@ export default function FilterControls() {
                 <div key={field}>
                     <FreeTextSearch
                         key={field}
-                        isDisabled={filters.isLocked}
                         defaultValue={filters.questName}
                         setSearch={(newValue) => updateFilters({ 'questName': newValue })}
                         placeholder="Quest name"
@@ -70,7 +72,6 @@ export default function FilterControls() {
                 <div key={field}>
                     <FreeTextSearch
                         key={field}
-                        isDisabled={filters.isLocked}
                         defaultValue={filters.taskOutput}
                         setSearch={(newValue) => updateFilters({ 'taskOutput': newValue })}
                         placeholder="Task output"
@@ -85,7 +86,6 @@ export default function FilterControls() {
                         key={field}
                         setFiltersSelected={(newValue) => updateFilters({ 'tomeFields': newValue })}
                         filtersSelected={filters.tomeFields}
-                        isDisabled={filters.isLocked}
                     />
                 </div>
             );
@@ -95,11 +95,29 @@ export default function FilterControls() {
                 <div key={field}>
                     <FreeTextSearch
                         key={field}
-                        isDisabled={filters.isLocked}
                         defaultValue={filters.tomeMultiSearch}
                         setSearch={(newValue) => updateFilters({ 'tomeMultiSearch': newValue })}
                         placeholder="Tome definition & values"
                     />
+                </div>
+            );
+        }
+        else if (field === FilterFieldType.ASSET_NAME) {
+            return (
+                <div key={field}>
+                    <FreeTextSearch
+                        key={field}
+                        defaultValue={filters.assetName}
+                        setSearch={(newValue) => updateFilters({ 'assetName': newValue })}
+                        placeholder="Asset name"
+                    />
+                </div>
+            );
+        }
+        else if (field === FilterFieldType.USER) {
+            return (
+                <div key={field}>
+                    <UserFilterBar />
                 </div>
             );
         }
@@ -113,7 +131,7 @@ export default function FilterControls() {
                 <div className="flex flex-row justify-between pb-2 border-gray-100 border-b-2 items-center">
                     <h3 className="font-medium text-lg text-gray-700">Filters</h3>
                     <Tooltip
-                        label={filters.isLocked ? "Click to unlock filter state" : "Click to lock filter state"}
+                        label={isLocked ? "Click to unlock filter state" : "Click to lock filter state"}
                         bg="white"
                         color="gray.600"
                         borderWidth="1px"
@@ -122,10 +140,10 @@ export default function FilterControls() {
                         <Button
                             buttonVariant="ghost"
                             buttonStyle={{ color: "purple", size: "md" }}
-                            onClick={() => updateFilters({ 'isLocked': !filters.isLocked })}
-                            leftIcon={filters.isLocked ? <LockKeyhole className="w-5 h-5" /> : <UnlockKeyhole className="w-5 h-5" />}
-                            aria-label={filters.isLocked ? "Unlock filters" : "Lock filters"}
-                            aria-pressed={filters.isLocked}
+                            onClick={() => setIsLocked((prev) => !prev)}
+                            leftIcon={isLocked ? <LockKeyhole className="w-5 h-5" /> : <UnlockKeyhole className="w-5 h-5" />}
+                            aria-label={isLocked ? "Unlock filters" : "Lock filters"}
+                            aria-pressed={isLocked}
                         />
                     </Tooltip>
                 </div>

@@ -2,8 +2,8 @@ use crate::PivotLibrary;
 pub mod arp_scan_impl;
 pub mod ncat_impl;
 pub mod port_scan_impl;
-pub mod reverse_shell_pty_impl;
 pub mod ssh_copy_impl;
+pub mod ssh_deploy_impl;
 pub mod ssh_exec_impl;
 
 use alloc::collections::BTreeMap;
@@ -22,71 +22,43 @@ use russh_sftp::client::SftpSession;
 use std::sync::Arc;
 
 // Deps for Agent
-use eldritch_agent::Agent;
-use pb::c2::TaskContext;
+use eldritch_agent::{Agent, Context};
 
 #[derive(Default)]
 #[eldritch_library_impl(PivotLibrary)]
 pub struct StdPivotLibrary {
     pub agent: Option<Arc<dyn Agent>>,
-    pub task_context: Option<TaskContext>,
+    pub context: Option<Context>,
 }
 
 impl core::fmt::Debug for StdPivotLibrary {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("StdPivotLibrary")
-            .field("task_id", &self.task_context.as_ref().map(|tc| tc.task_id))
+            .field("context", &self.context)
             .finish()
     }
 }
 
 impl StdPivotLibrary {
-    pub fn new(agent: Arc<dyn Agent>, task_context: TaskContext) -> Self {
+    pub fn new(agent: Arc<dyn Agent>, context: Context) -> Self {
         Self {
             agent: Some(agent),
-            task_context: Some(task_context),
+            context: Some(context),
         }
     }
 }
 
 impl PivotLibrary for StdPivotLibrary {
-    fn reverse_shell_pty(&self, cmd: Option<String>) -> Result<(), String> {
-        let agent = self
-            .agent
-            .as_ref()
-            .ok_or_else(|| "No agent available".to_string())?;
-        let task_context = self
-            .task_context
-            .clone()
-            .ok_or_else(|| "No task context available".to_string())?;
-        reverse_shell_pty_impl::reverse_shell_pty(agent.clone(), task_context, cmd)
-            .map_err(|e| e.to_string())
-    }
-
-    fn reverse_shell_repl(&self) -> Result<(), String> {
-        let agent = self
-            .agent
-            .as_ref()
-            .ok_or_else(|| "No agent available".to_string())?;
-        let task_context = self
-            .task_context
-            .clone()
-            .ok_or_else(|| "No task context available".to_string())?;
-        agent
-            .start_repl_reverse_shell(task_context)
-            .map_err(|e| e.to_string())
-    }
-
     fn create_portal(&self) -> Result<(), String> {
         let agent = self
             .agent
             .as_ref()
             .ok_or_else(|| "No agent available".to_string())?;
-        let task_context = self
-            .task_context
+        let context = self
+            .context
             .clone()
-            .ok_or_else(|| "No task context available".to_string())?;
-        agent.create_portal(task_context).map_err(|e| e.to_string())
+            .ok_or_else(|| "No context available".to_string())?;
+        agent.create_portal(context).map_err(|e| e.to_string())
     }
 
     fn ssh_exec(
@@ -165,6 +137,30 @@ impl PivotLibrary for StdPivotLibrary {
     ) -> Result<String, String> {
         ncat_impl::ncat(address, port as i32, data, protocol).map_err(|e| e.to_string())
     }
+
+    fn ssh_deploy(
+        &self,
+        ips: Vec<String>,
+        credentials: Vec<BTreeMap<String, Value>>,
+        cmd: String,
+        privesc_cmd: Option<String>,
+        payload: Option<Vec<u8>>,
+        payload_dst: Option<String>,
+        timeout: Option<i64>,
+        retries: Option<i64>,
+    ) -> Result<Vec<BTreeMap<String, Value>>, String> {
+        ssh_deploy_impl::ssh_deploy(
+            ips,
+            credentials,
+            cmd,
+            privesc_cmd,
+            payload,
+            payload_dst,
+            timeout,
+            retries,
+        )
+        .map_err(|e| e.to_string())
+    }
 }
 
 // SSH Client utils
@@ -202,15 +198,31 @@ impl Session {
         // Try key auth first
         if let Some(local_key) = key {
             let key_pair = decode_secret_key(&local_key, key_password)?;
-            let _auth_res: bool = session
-                .authenticate_publickey(user, Arc::new(key_pair))
+            let auth_res: bool = session
+                .authenticate_publickey(user.clone(), Arc::new(key_pair))
                 .await?;
+            if !auth_res {
+                return Err(anyhow::anyhow!(
+                    "publickey authentication rejected for {}@{}",
+                    user,
+                    addrs
+                ));
+            }
             return Ok(Self { session });
         }
 
         // If key auth doesn't work try password auth
         if let Some(local_pass) = password {
-            let _auth_res: bool = session.authenticate_password(user, local_pass).await?;
+            let auth_res: bool = session
+                .authenticate_password(user.clone(), local_pass)
+                .await?;
+            if !auth_res {
+                return Err(anyhow::anyhow!(
+                    "password authentication rejected for {}@{}",
+                    user,
+                    addrs
+                ));
+            }
             return Ok(Self { session });
         }
 
@@ -230,6 +242,19 @@ impl Session {
         let mut dst_file = sftp.create(dst).await?;
         let mut src_file = tokio::io::BufReader::new(tokio::fs::File::open(src).await?);
         let _bytes_copied = tokio::io::copy_buf(&mut src_file, &mut dst_file).await?;
+
+        Ok(())
+    }
+
+    pub async fn copy_bytes(&mut self, src: &[u8], dst: &str) -> anyhow::Result<()> {
+        let mut channel = self.session.channel_open_session().await?;
+        channel.request_subsystem(true, "sftp").await.unwrap();
+        let sftp = SftpSession::new(channel.into_stream()).await.unwrap();
+
+        let _ = sftp.remove_file(dst).await;
+        let mut dst_file = sftp.create(dst).await?;
+        let mut src_reader = src;
+        let _bytes_copied = tokio::io::copy(&mut src_reader, &mut dst_file).await?;
 
         Ok(())
     }

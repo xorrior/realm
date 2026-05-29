@@ -1,11 +1,17 @@
-#![no_std]
 extern crate alloc;
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
-use pb::c2::{self, TaskContext};
+use pb::c2::{self, ShellTaskContext, TaskContext};
 
+#[derive(Clone, Debug)]
+pub enum Context {
+    Task(TaskContext),
+    ShellTask(ShellTaskContext),
+}
+
+#[async_trait::async_trait]
 pub trait Agent: Send + Sync {
     // Interactivity
     fn fetch_asset(&self, req: c2::FetchAssetRequest) -> Result<Vec<u8>, String>;
@@ -13,28 +19,26 @@ pub trait Agent: Send + Sync {
         &self,
         req: c2::ReportCredentialRequest,
     ) -> Result<c2::ReportCredentialResponse, String>;
-    fn report_file(&self, req: c2::ReportFileRequest) -> Result<c2::ReportFileResponse, String>;
+    fn report_file(
+        &self,
+        req: std::sync::mpsc::Receiver<c2::ReportFileRequest>,
+    ) -> Result<c2::ReportFileResponse, String>;
     fn report_process_list(
         &self,
         req: c2::ReportProcessListRequest,
     ) -> Result<c2::ReportProcessListResponse, String>;
-    fn report_task_output(
+    fn report_output(
         &self,
-        req: c2::ReportTaskOutputRequest,
-    ) -> Result<c2::ReportTaskOutputResponse, String>;
-    fn start_reverse_shell(
-        &self,
-        task_context: TaskContext,
-        cmd: Option<String>,
-    ) -> Result<(), String>;
-    fn create_portal(&self, task_context: TaskContext) -> Result<(), String>;
-    fn start_repl_reverse_shell(&self, task_context: TaskContext) -> Result<(), String>;
+        req: c2::ReportOutputRequest,
+    ) -> Result<c2::ReportOutputResponse, String>;
+    fn create_portal(&self, context: Context) -> Result<(), String>;
     fn claim_tasks(&self, req: c2::ClaimTasksRequest) -> Result<c2::ClaimTasksResponse, String>;
 
     // Agent Configuration
     fn get_config(&self) -> Result<BTreeMap<String, String>, String>;
     fn get_transport(&self) -> Result<String, String>;
     fn set_transport(&self, transport: String) -> Result<(), String>;
+    fn reset_transport(&self) -> Result<(), String>;
     fn list_transports(&self) -> Result<Vec<String>, String>;
     fn get_callback_interval(&self) -> Result<u64, String>;
     fn set_callback_interval(&self, interval: u64) -> Result<(), String>;
@@ -48,4 +52,12 @@ pub trait Agent: Send + Sync {
     // Task Management
     fn list_tasks(&self) -> Result<Vec<c2::Task>, String>;
     fn stop_task(&self, task_id: i64) -> Result<(), String>;
+
+    // Chained transport forwarding
+    async fn forward_raw(
+        &self,
+        path: String,
+        rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+        tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    ) -> Result<(), String>;
 }

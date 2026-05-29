@@ -9,6 +9,19 @@ import (
 )
 
 var (
+	// AdventuresColumns holds the columns for the "adventures" table.
+	AdventuresColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "last_modified_at", Type: field.TypeTime},
+		{Name: "name", Type: field.TypeString},
+	}
+	// AdventuresTable holds the schema information for the "adventures" table.
+	AdventuresTable = &schema.Table{
+		Name:       "adventures",
+		Columns:    AdventuresColumns,
+		PrimaryKey: []*schema.Column{AdventuresColumns[0]},
+	}
 	// AssetsColumns holds the columns for the "assets" table.
 	AssetsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -18,12 +31,21 @@ var (
 		{Name: "size", Type: field.TypeInt, Default: 0},
 		{Name: "hash", Type: field.TypeString, Size: 100},
 		{Name: "content", Type: field.TypeBytes, SchemaType: map[string]string{"mysql": "LONGBLOB"}},
+		{Name: "asset_creator", Type: field.TypeInt, Nullable: true},
 	}
 	// AssetsTable holds the schema information for the "assets" table.
 	AssetsTable = &schema.Table{
 		Name:       "assets",
 		Columns:    AssetsColumns,
 		PrimaryKey: []*schema.Column{AssetsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "assets_users_creator",
+				Columns:    []*schema.Column{AssetsColumns[7]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
 	}
 	// BeaconsColumns holds the columns for the "beacons" table.
 	BeaconsColumns = []*schema.Column{
@@ -37,7 +59,7 @@ var (
 		{Name: "last_seen_at", Type: field.TypeTime, Nullable: true},
 		{Name: "next_seen_at", Type: field.TypeTime, Nullable: true},
 		{Name: "interval", Type: field.TypeUint64, Nullable: true},
-		{Name: "transport", Type: field.TypeEnum, Enums: []string{"TRANSPORT_DNS", "TRANSPORT_GRPC", "TRANSPORT_HTTP1", "TRANSPORT_UNSPECIFIED"}},
+		{Name: "transport", Type: field.TypeEnum, Enums: []string{"TRANSPORT_DNS", "TRANSPORT_GRPC", "TRANSPORT_HTTP1", "TRANSPORT_ICMP", "TRANSPORT_QUIC", "TRANSPORT_TCP_BIND", "TRANSPORT_UDS", "TRANSPORT_UNSPECIFIED"}},
 		{Name: "beacon_host", Type: field.TypeInt},
 	}
 	// BeaconsTable holds the schema information for the "beacons" table.
@@ -54,6 +76,181 @@ var (
 			},
 		},
 	}
+	// BeaconHistoriesColumns holds the columns for the "beacon_histories" table.
+	BeaconHistoriesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "last_modified_at", Type: field.TypeTime},
+		{Name: "latency", Type: field.TypeInt64},
+		{Name: "beacon_history_beacon", Type: field.TypeInt},
+	}
+	// BeaconHistoriesTable holds the schema information for the "beacon_histories" table.
+	BeaconHistoriesTable = &schema.Table{
+		Name:       "beacon_histories",
+		Columns:    BeaconHistoriesColumns,
+		PrimaryKey: []*schema.Column{BeaconHistoriesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "beacon_histories_beacons_beacon",
+				Columns:    []*schema.Column{BeaconHistoriesColumns[4]},
+				RefColumns: []*schema.Column{BeaconsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+	}
+	// BuildProfilesColumns holds the columns for the "build_profiles" table.
+	BuildProfilesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "name", Type: field.TypeString},
+		{Name: "description", Type: field.TypeString},
+		{Name: "transports", Type: field.TypeJSON},
+		{Name: "build_image", Type: field.TypeString, Default: "spellshift/devcontainer:main"},
+		{Name: "prebuildscript", Type: field.TypeString, Default: "echo 'no prebuild set'"},
+		{Name: "setupscript", Type: field.TypeString, Default: "cd /home/vscode && git clone https://github.com/spellshift/realm.git realm && cd realm/implants/imix && rm -rf install_scripts/* && cp -r /mnt/tomes/* install_scripts/ 2>/dev/null || true"},
+		{Name: "postbuildscript", Type: field.TypeString, Default: "echo 'no postbuild set'"},
+		{Name: "unique", Type: field.TypeString, Nullable: true},
+		{Name: "tomes", Type: field.TypeJSON, Nullable: true},
+	}
+	// BuildProfilesTable holds the schema information for the "build_profiles" table.
+	BuildProfilesTable = &schema.Table{
+		Name:       "build_profiles",
+		Columns:    BuildProfilesColumns,
+		PrimaryKey: []*schema.Column{BuildProfilesColumns[0]},
+	}
+	// BuildTasksColumns holds the columns for the "build_tasks" table.
+	BuildTasksColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "last_modified_at", Type: field.TypeTime},
+		{Name: "target_os", Type: field.TypeEnum, Enums: []string{"PLATFORM_BSD", "PLATFORM_LINUX", "PLATFORM_MACOS", "PLATFORM_UNSPECIFIED", "PLATFORM_WINDOWS"}},
+		{Name: "target_format", Type: field.TypeEnum, Enums: []string{"TARGET_FORMAT_BIN", "TARGET_FORMAT_CDYLIB", "TARGET_FORMAT_UNSPECIFIED", "TARGET_FORMAT_WINDOWS_SERVICE"}},
+		{Name: "build_script", Type: field.TypeString, Size: 2147483647, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
+		{Name: "claimed_at", Type: field.TypeTime, Nullable: true},
+		{Name: "started_at", Type: field.TypeTime, Nullable: true},
+		{Name: "finished_at", Type: field.TypeTime, Nullable: true},
+		{Name: "output", Type: field.TypeString, Nullable: true, Size: 2147483647, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
+		{Name: "output_size", Type: field.TypeInt, Default: 0},
+		{Name: "error", Type: field.TypeString, Nullable: true, Size: 2147483647, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
+		{Name: "error_size", Type: field.TypeInt, Default: 0},
+		{Name: "exit_code", Type: field.TypeInt, Nullable: true},
+		{Name: "artifact_path", Type: field.TypeString, Nullable: true},
+		{Name: "setupscript", Type: field.TypeString, Nullable: true, Size: 2147483647, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
+		{Name: "unique", Type: field.TypeString, Nullable: true, Size: 2147483647, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
+		{Name: "build_task_builder", Type: field.TypeInt},
+		{Name: "build_task_profile", Type: field.TypeInt},
+		{Name: "build_task_artifact", Type: field.TypeInt, Nullable: true},
+	}
+	// BuildTasksTable holds the schema information for the "build_tasks" table.
+	BuildTasksTable = &schema.Table{
+		Name:       "build_tasks",
+		Columns:    BuildTasksColumns,
+		PrimaryKey: []*schema.Column{BuildTasksColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "build_tasks_builders_builder",
+				Columns:    []*schema.Column{BuildTasksColumns[17]},
+				RefColumns: []*schema.Column{BuildersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "build_tasks_build_profiles_profile",
+				Columns:    []*schema.Column{BuildTasksColumns[18]},
+				RefColumns: []*schema.Column{BuildProfilesColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "build_tasks_assets_artifact",
+				Columns:    []*schema.Column{BuildTasksColumns[19]},
+				RefColumns: []*schema.Column{AssetsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+	}
+	// BuildersColumns holds the columns for the "builders" table.
+	BuildersColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "last_modified_at", Type: field.TypeTime},
+		{Name: "identifier", Type: field.TypeString, Unique: true},
+		{Name: "supported_targets", Type: field.TypeJSON},
+		{Name: "upstream", Type: field.TypeString, Default: "http://127.0.0.1:8000"},
+		{Name: "last_seen_at", Type: field.TypeTime, Nullable: true},
+	}
+	// BuildersTable holds the schema information for the "builders" table.
+	BuildersTable = &schema.Table{
+		Name:       "builders",
+		Columns:    BuildersColumns,
+		PrimaryKey: []*schema.Column{BuildersColumns[0]},
+	}
+	// DeviceAuthsColumns holds the columns for the "device_auths" table.
+	DeviceAuthsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "last_modified_at", Type: field.TypeTime},
+		{Name: "user_code", Type: field.TypeString, Unique: true},
+		{Name: "device_code", Type: field.TypeString, Unique: true},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"PENDING", "APPROVED", "DENIED"}, Default: "PENDING"},
+		{Name: "expires_at", Type: field.TypeTime},
+		{Name: "device_auth_user", Type: field.TypeInt, Nullable: true},
+	}
+	// DeviceAuthsTable holds the schema information for the "device_auths" table.
+	DeviceAuthsTable = &schema.Table{
+		Name:       "device_auths",
+		Columns:    DeviceAuthsColumns,
+		PrimaryKey: []*schema.Column{DeviceAuthsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "device_auths_users_user",
+				Columns:    []*schema.Column{DeviceAuthsColumns[7]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+	}
+	// EventsColumns holds the columns for the "events" table.
+	EventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "last_modified_at", Type: field.TypeTime},
+		{Name: "timestamp", Type: field.TypeInt64},
+		{Name: "kind", Type: field.TypeEnum, Enums: []string{"BEACON_LOST", "HOST_ACCESS_NEW", "HOST_ACCESS_RECOVERED", "HOST_ACCESS_LOST", "QUEST_COMPLETED", "NEW_USER_REQUEST"}},
+		{Name: "beacon_events", Type: field.TypeInt, Nullable: true},
+		{Name: "host_events", Type: field.TypeInt, Nullable: true},
+		{Name: "quest_events", Type: field.TypeInt, Nullable: true},
+		{Name: "user_events", Type: field.TypeInt, Nullable: true},
+	}
+	// EventsTable holds the schema information for the "events" table.
+	EventsTable = &schema.Table{
+		Name:       "events",
+		Columns:    EventsColumns,
+		PrimaryKey: []*schema.Column{EventsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "events_beacons_events",
+				Columns:    []*schema.Column{EventsColumns[5]},
+				RefColumns: []*schema.Column{BeaconsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "events_hosts_events",
+				Columns:    []*schema.Column{EventsColumns[6]},
+				RefColumns: []*schema.Column{HostsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "events_quests_events",
+				Columns:    []*schema.Column{EventsColumns[7]},
+				RefColumns: []*schema.Column{QuestsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "events_users_events",
+				Columns:    []*schema.Column{EventsColumns[8]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+	}
 	// HostsColumns holds the columns for the "hosts" table.
 	HostsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -66,7 +263,7 @@ var (
 		{Name: "platform", Type: field.TypeEnum, Enums: []string{"PLATFORM_BSD", "PLATFORM_LINUX", "PLATFORM_MACOS", "PLATFORM_UNSPECIFIED", "PLATFORM_WINDOWS"}},
 		{Name: "last_seen_at", Type: field.TypeTime, Nullable: true},
 		{Name: "next_seen_at", Type: field.TypeTime, Nullable: true},
-		{Name: "tome_scheduled_hosts", Type: field.TypeInt, Nullable: true},
+		{Name: "scheduled_task_scheduled_hosts", Type: field.TypeInt, Nullable: true},
 	}
 	// HostsTable holds the schema information for the "hosts" table.
 	HostsTable = &schema.Table{
@@ -75,9 +272,9 @@ var (
 		PrimaryKey: []*schema.Column{HostsColumns[0]},
 		ForeignKeys: []*schema.ForeignKey{
 			{
-				Symbol:     "hosts_tomes_scheduled_hosts",
+				Symbol:     "hosts_scheduled_tasks_scheduled_hosts",
 				Columns:    []*schema.Column{HostsColumns[10]},
-				RefColumns: []*schema.Column{TomesColumns[0]},
+				RefColumns: []*schema.Column{ScheduledTasksColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 		},
@@ -91,6 +288,7 @@ var (
 		{Name: "secret", Type: field.TypeString, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
 		{Name: "kind", Type: field.TypeEnum, Enums: []string{"KIND_NTLM_HASH", "KIND_PASSWORD", "KIND_SSH_KEY", "KIND_UNSPECIFIED"}},
 		{Name: "host_credential_host", Type: field.TypeInt},
+		{Name: "shell_task_reported_credentials", Type: field.TypeInt, Nullable: true},
 		{Name: "task_reported_credentials", Type: field.TypeInt, Nullable: true},
 	}
 	// HostCredentialsTable holds the schema information for the "host_credentials" table.
@@ -106,8 +304,14 @@ var (
 				OnDelete:   schema.Cascade,
 			},
 			{
-				Symbol:     "host_credentials_tasks_reported_credentials",
+				Symbol:     "host_credentials_shell_tasks_reported_credentials",
 				Columns:    []*schema.Column{HostCredentialsColumns[7]},
+				RefColumns: []*schema.Column{ShellTasksColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "host_credentials_tasks_reported_credentials",
+				Columns:    []*schema.Column{HostCredentialsColumns[8]},
 				RefColumns: []*schema.Column{TasksColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -125,9 +329,12 @@ var (
 		{Name: "size", Type: field.TypeUint64, Default: 0},
 		{Name: "hash", Type: field.TypeString, Nullable: true, Size: 100},
 		{Name: "content", Type: field.TypeBytes, Nullable: true, SchemaType: map[string]string{"mysql": "LONGBLOB"}},
+		{Name: "preview_type", Type: field.TypeEnum, Enums: []string{"TEXT", "NONE"}, Default: "NONE"},
+		{Name: "preview", Type: field.TypeBytes, Nullable: true, SchemaType: map[string]string{"mysql": "LONGBLOB"}},
 		{Name: "host_files", Type: field.TypeInt, Nullable: true},
 		{Name: "host_file_host", Type: field.TypeInt},
-		{Name: "task_reported_files", Type: field.TypeInt},
+		{Name: "shell_task_reported_files", Type: field.TypeInt, Nullable: true},
+		{Name: "task_reported_files", Type: field.TypeInt, Nullable: true},
 	}
 	// HostFilesTable holds the schema information for the "host_files" table.
 	HostFilesTable = &schema.Table{
@@ -137,21 +344,27 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "host_files_hosts_files",
-				Columns:    []*schema.Column{HostFilesColumns[10]},
+				Columns:    []*schema.Column{HostFilesColumns[12]},
 				RefColumns: []*schema.Column{HostsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "host_files_hosts_host",
-				Columns:    []*schema.Column{HostFilesColumns[11]},
+				Columns:    []*schema.Column{HostFilesColumns[13]},
 				RefColumns: []*schema.Column{HostsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
 			{
+				Symbol:     "host_files_shell_tasks_reported_files",
+				Columns:    []*schema.Column{HostFilesColumns[14]},
+				RefColumns: []*schema.Column{ShellTasksColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
 				Symbol:     "host_files_tasks_reported_files",
-				Columns:    []*schema.Column{HostFilesColumns[12]},
+				Columns:    []*schema.Column{HostFilesColumns[15]},
 				RefColumns: []*schema.Column{TasksColumns[0]},
-				OnDelete:   schema.NoAction,
+				OnDelete:   schema.SetNull,
 			},
 		},
 	}
@@ -163,15 +376,17 @@ var (
 		{Name: "pid", Type: field.TypeUint64},
 		{Name: "ppid", Type: field.TypeUint64},
 		{Name: "name", Type: field.TypeString},
-		{Name: "principal", Type: field.TypeString},
+		{Name: "principal", Type: field.TypeString, Nullable: true},
 		{Name: "path", Type: field.TypeString, Nullable: true},
-		{Name: "cmd", Type: field.TypeString, Nullable: true},
+		{Name: "cmd", Type: field.TypeString, Nullable: true, Size: 2147483647},
 		{Name: "env", Type: field.TypeString, Nullable: true},
 		{Name: "cwd", Type: field.TypeString, Nullable: true},
 		{Name: "status", Type: field.TypeEnum, Enums: []string{"STATUS_DEAD", "STATUS_IDLE", "STATUS_LOCK_BLOCKED", "STATUS_PARKED", "STATUS_RUN", "STATUS_SLEEP", "STATUS_STOP", "STATUS_TRACING", "STATUS_UNINTERUPTIBLE_DISK_SLEEP", "STATUS_UNKNOWN", "STATUS_UNSPECIFIED", "STATUS_WAKE_KILL", "STATUS_WAKING", "STATUS_ZOMBIE"}},
+		{Name: "start_time", Type: field.TypeUint64, Nullable: true},
 		{Name: "host_processes", Type: field.TypeInt, Nullable: true},
 		{Name: "host_process_host", Type: field.TypeInt},
-		{Name: "task_reported_processes", Type: field.TypeInt},
+		{Name: "shell_task_reported_processes", Type: field.TypeInt, Nullable: true},
+		{Name: "task_reported_processes", Type: field.TypeInt, Nullable: true},
 	}
 	// HostProcessesTable holds the schema information for the "host_processes" table.
 	HostProcessesTable = &schema.Table{
@@ -181,21 +396,27 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "host_processes_hosts_processes",
-				Columns:    []*schema.Column{HostProcessesColumns[12]},
+				Columns:    []*schema.Column{HostProcessesColumns[13]},
 				RefColumns: []*schema.Column{HostsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "host_processes_hosts_host",
-				Columns:    []*schema.Column{HostProcessesColumns[13]},
+				Columns:    []*schema.Column{HostProcessesColumns[14]},
 				RefColumns: []*schema.Column{HostsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
 			{
+				Symbol:     "host_processes_shell_tasks_reported_processes",
+				Columns:    []*schema.Column{HostProcessesColumns[15]},
+				RefColumns: []*schema.Column{ShellTasksColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
 				Symbol:     "host_processes_tasks_reported_processes",
-				Columns:    []*schema.Column{HostProcessesColumns[14]},
+				Columns:    []*schema.Column{HostProcessesColumns[16]},
 				RefColumns: []*schema.Column{TasksColumns[0]},
-				OnDelete:   schema.NoAction,
+				OnDelete:   schema.SetNull,
 			},
 		},
 	}
@@ -206,8 +427,10 @@ var (
 		{Name: "last_modified_at", Type: field.TypeTime},
 		{Name: "path", Type: field.TypeString, Unique: true},
 		{Name: "expires_at", Type: field.TypeTime},
-		{Name: "downloads_remaining", Type: field.TypeInt, Default: 0},
+		{Name: "download_limit", Type: field.TypeInt, Nullable: true},
+		{Name: "downloads", Type: field.TypeInt, Default: 0},
 		{Name: "link_asset", Type: field.TypeInt},
+		{Name: "link_creator", Type: field.TypeInt, Nullable: true},
 	}
 	// LinksTable holds the schema information for the "links" table.
 	LinksTable = &schema.Table{
@@ -217,8 +440,45 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "links_assets_asset",
-				Columns:    []*schema.Column{LinksColumns[6]},
+				Columns:    []*schema.Column{LinksColumns[7]},
 				RefColumns: []*schema.Column{AssetsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "links_users_creator",
+				Columns:    []*schema.Column{LinksColumns[8]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+	}
+	// NotificationsColumns holds the columns for the "notifications" table.
+	NotificationsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "last_modified_at", Type: field.TypeTime},
+		{Name: "priority", Type: field.TypeEnum, Enums: []string{"Urgent", "High", "Medium", "Low"}, Default: "Low"},
+		{Name: "read", Type: field.TypeBool, Default: false},
+		{Name: "archived", Type: field.TypeBool, Default: false},
+		{Name: "notification_user", Type: field.TypeInt},
+		{Name: "notification_event", Type: field.TypeInt},
+	}
+	// NotificationsTable holds the schema information for the "notifications" table.
+	NotificationsTable = &schema.Table{
+		Name:       "notifications",
+		Columns:    NotificationsColumns,
+		PrimaryKey: []*schema.Column{NotificationsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "notifications_users_user",
+				Columns:    []*schema.Column{NotificationsColumns[6]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "notifications_events_event",
+				Columns:    []*schema.Column{NotificationsColumns[7]},
+				RefColumns: []*schema.Column{EventsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
 		},
@@ -229,9 +489,11 @@ var (
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "last_modified_at", Type: field.TypeTime},
 		{Name: "closed_at", Type: field.TypeTime, Nullable: true},
-		{Name: "portal_task", Type: field.TypeInt},
+		{Name: "portal_task", Type: field.TypeInt, Nullable: true},
+		{Name: "portal_shell_task", Type: field.TypeInt, Nullable: true},
 		{Name: "portal_beacon", Type: field.TypeInt},
 		{Name: "portal_owner", Type: field.TypeInt},
+		{Name: "shell_portals", Type: field.TypeInt, Nullable: true},
 	}
 	// PortalsTable holds the schema information for the "portals" table.
 	PortalsTable = &schema.Table{
@@ -243,19 +505,31 @@ var (
 				Symbol:     "portals_tasks_task",
 				Columns:    []*schema.Column{PortalsColumns[4]},
 				RefColumns: []*schema.Column{TasksColumns[0]},
-				OnDelete:   schema.NoAction,
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "portals_shell_tasks_shell_task",
+				Columns:    []*schema.Column{PortalsColumns[5]},
+				RefColumns: []*schema.Column{ShellTasksColumns[0]},
+				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "portals_beacons_beacon",
-				Columns:    []*schema.Column{PortalsColumns[5]},
+				Columns:    []*schema.Column{PortalsColumns[6]},
 				RefColumns: []*schema.Column{BeaconsColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
 			{
 				Symbol:     "portals_users_owner",
-				Columns:    []*schema.Column{PortalsColumns[6]},
+				Columns:    []*schema.Column{PortalsColumns[7]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "portals_shells_portals",
+				Columns:    []*schema.Column{PortalsColumns[8]},
+				RefColumns: []*schema.Column{ShellsColumns[0]},
+				OnDelete:   schema.SetNull,
 			},
 		},
 	}
@@ -268,9 +542,12 @@ var (
 		{Name: "parameters", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
 		{Name: "param_defs_at_creation", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
 		{Name: "eldritch_at_creation", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
+		{Name: "adventure_quests", Type: field.TypeInt, Nullable: true},
 		{Name: "quest_tome", Type: field.TypeInt},
 		{Name: "quest_bundle", Type: field.TypeInt, Nullable: true},
 		{Name: "quest_creator", Type: field.TypeInt, Nullable: true},
+		{Name: "quest_related_quests", Type: field.TypeInt, Nullable: true},
+		{Name: "scheduled_task_quests", Type: field.TypeInt, Nullable: true},
 	}
 	// QuestsTable holds the schema information for the "quests" table.
 	QuestsTable = &schema.Table{
@@ -279,21 +556,39 @@ var (
 		PrimaryKey: []*schema.Column{QuestsColumns[0]},
 		ForeignKeys: []*schema.ForeignKey{
 			{
-				Symbol:     "quests_tomes_tome",
+				Symbol:     "quests_adventures_quests",
 				Columns:    []*schema.Column{QuestsColumns[7]},
+				RefColumns: []*schema.Column{AdventuresColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "quests_tomes_tome",
+				Columns:    []*schema.Column{QuestsColumns[8]},
 				RefColumns: []*schema.Column{TomesColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
 			{
 				Symbol:     "quests_assets_bundle",
-				Columns:    []*schema.Column{QuestsColumns[8]},
+				Columns:    []*schema.Column{QuestsColumns[9]},
 				RefColumns: []*schema.Column{AssetsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "quests_users_creator",
-				Columns:    []*schema.Column{QuestsColumns[9]},
+				Columns:    []*schema.Column{QuestsColumns[10]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "quests_quests_related_quests",
+				Columns:    []*schema.Column{QuestsColumns[11]},
+				RefColumns: []*schema.Column{QuestsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "quests_scheduled_tasks_quests",
+				Columns:    []*schema.Column{QuestsColumns[12]},
+				RefColumns: []*schema.Column{ScheduledTasksColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 		},
@@ -323,6 +618,73 @@ var (
 			},
 		},
 	}
+	// ScheduledTasksColumns holds the columns for the "scheduled_tasks" table.
+	ScheduledTasksColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "last_modified_at", Type: field.TypeTime},
+		{Name: "name", Type: field.TypeString, Unique: true},
+		{Name: "description", Type: field.TypeString},
+		{Name: "run_on_new_beacon_callback", Type: field.TypeBool, Default: false},
+		{Name: "run_on_first_host_callback", Type: field.TypeBool, Default: false},
+		{Name: "parameters", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
+		{Name: "run_on_schedule", Type: field.TypeString, Default: ""},
+		{Name: "disabled", Type: field.TypeBool, Default: false},
+		{Name: "scheduled_task_tome", Type: field.TypeInt},
+	}
+	// ScheduledTasksTable holds the schema information for the "scheduled_tasks" table.
+	ScheduledTasksTable = &schema.Table{
+		Name:       "scheduled_tasks",
+		Columns:    ScheduledTasksColumns,
+		PrimaryKey: []*schema.Column{ScheduledTasksColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "scheduled_tasks_tomes_tome",
+				Columns:    []*schema.Column{ScheduledTasksColumns[10]},
+				RefColumns: []*schema.Column{TomesColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+	}
+	// ScreenshotsColumns holds the columns for the "screenshots" table.
+	ScreenshotsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "last_modified_at", Type: field.TypeTime},
+		{Name: "name", Type: field.TypeString},
+		{Name: "size", Type: field.TypeUint64, Default: 0},
+		{Name: "hash", Type: field.TypeString, Nullable: true, Size: 100},
+		{Name: "content", Type: field.TypeBytes, Nullable: true, SchemaType: map[string]string{"mysql": "LONGBLOB"}},
+		{Name: "screenshot_host", Type: field.TypeInt},
+		{Name: "shell_task_screenshots", Type: field.TypeInt, Nullable: true},
+		{Name: "task_screenshots", Type: field.TypeInt, Nullable: true},
+	}
+	// ScreenshotsTable holds the schema information for the "screenshots" table.
+	ScreenshotsTable = &schema.Table{
+		Name:       "screenshots",
+		Columns:    ScreenshotsColumns,
+		PrimaryKey: []*schema.Column{ScreenshotsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "screenshots_hosts_host",
+				Columns:    []*schema.Column{ScreenshotsColumns[7]},
+				RefColumns: []*schema.Column{HostsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "screenshots_shell_tasks_screenshots",
+				Columns:    []*schema.Column{ScreenshotsColumns[8]},
+				RefColumns: []*schema.Column{ShellTasksColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "screenshots_tasks_screenshots",
+				Columns:    []*schema.Column{ScreenshotsColumns[9]},
+				RefColumns: []*schema.Column{TasksColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+	}
 	// ShellsColumns holds the columns for the "shells" table.
 	ShellsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -330,7 +692,7 @@ var (
 		{Name: "last_modified_at", Type: field.TypeTime},
 		{Name: "closed_at", Type: field.TypeTime, Nullable: true},
 		{Name: "data", Type: field.TypeBytes, SchemaType: map[string]string{"mysql": "LONGBLOB"}},
-		{Name: "shell_task", Type: field.TypeInt},
+		{Name: "shell_task", Type: field.TypeInt, Nullable: true},
 		{Name: "shell_beacon", Type: field.TypeInt},
 		{Name: "shell_owner", Type: field.TypeInt},
 	}
@@ -344,7 +706,7 @@ var (
 				Symbol:     "shells_tasks_task",
 				Columns:    []*schema.Column{ShellsColumns[5]},
 				RefColumns: []*schema.Column{TasksColumns[0]},
-				OnDelete:   schema.NoAction,
+				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "shells_beacons_beacon",
@@ -355,6 +717,83 @@ var (
 			{
 				Symbol:     "shells_users_owner",
 				Columns:    []*schema.Column{ShellsColumns[7]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+	}
+	// ShellPivotsColumns holds the columns for the "shell_pivots" table.
+	ShellPivotsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "last_modified_at", Type: field.TypeTime},
+		{Name: "closed_at", Type: field.TypeTime, Nullable: true},
+		{Name: "stream_id", Type: field.TypeString},
+		{Name: "kind", Type: field.TypeEnum, Enums: []string{"ssh", "pty"}},
+		{Name: "destination", Type: field.TypeString},
+		{Name: "port", Type: field.TypeInt},
+		{Name: "data", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
+		{Name: "shell_pivot_shell", Type: field.TypeInt, Nullable: true},
+		{Name: "shell_pivot_portal", Type: field.TypeInt, Nullable: true},
+		{Name: "shell_pivot_credential", Type: field.TypeInt, Nullable: true},
+	}
+	// ShellPivotsTable holds the schema information for the "shell_pivots" table.
+	ShellPivotsTable = &schema.Table{
+		Name:       "shell_pivots",
+		Columns:    ShellPivotsColumns,
+		PrimaryKey: []*schema.Column{ShellPivotsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "shell_pivots_shells_shell",
+				Columns:    []*schema.Column{ShellPivotsColumns[9]},
+				RefColumns: []*schema.Column{ShellsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "shell_pivots_portals_portal",
+				Columns:    []*schema.Column{ShellPivotsColumns[10]},
+				RefColumns: []*schema.Column{PortalsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "shell_pivots_host_credentials_credential",
+				Columns:    []*schema.Column{ShellPivotsColumns[11]},
+				RefColumns: []*schema.Column{HostCredentialsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+	}
+	// ShellTasksColumns holds the columns for the "shell_tasks" table.
+	ShellTasksColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "last_modified_at", Type: field.TypeTime},
+		{Name: "input", Type: field.TypeString, Size: 2147483647, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
+		{Name: "output", Type: field.TypeString, Nullable: true, Size: 2147483647, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
+		{Name: "error", Type: field.TypeString, Nullable: true, Size: 2147483647, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
+		{Name: "stream_id", Type: field.TypeString},
+		{Name: "sequence_id", Type: field.TypeUint64},
+		{Name: "claimed_at", Type: field.TypeTime, Nullable: true},
+		{Name: "exec_started_at", Type: field.TypeTime, Nullable: true},
+		{Name: "exec_finished_at", Type: field.TypeTime, Nullable: true},
+		{Name: "shell_shell_tasks", Type: field.TypeInt},
+		{Name: "shell_task_creator", Type: field.TypeInt},
+	}
+	// ShellTasksTable holds the schema information for the "shell_tasks" table.
+	ShellTasksTable = &schema.Table{
+		Name:       "shell_tasks",
+		Columns:    ShellTasksColumns,
+		PrimaryKey: []*schema.Column{ShellTasksColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "shell_tasks_shells_shell_tasks",
+				Columns:    []*schema.Column{ShellTasksColumns[11]},
+				RefColumns: []*schema.Column{ShellsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "shell_tasks_users_creator",
+				Columns:    []*schema.Column{ShellTasksColumns[12]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -412,13 +851,10 @@ var (
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "last_modified_at", Type: field.TypeTime},
 		{Name: "name", Type: field.TypeString, Unique: true},
-		{Name: "description", Type: field.TypeString},
+		{Name: "description", Type: field.TypeString, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
 		{Name: "author", Type: field.TypeString},
 		{Name: "support_model", Type: field.TypeEnum, Enums: []string{"UNSPECIFIED", "FIRST_PARTY", "COMMUNITY"}, Default: "UNSPECIFIED"},
 		{Name: "tactic", Type: field.TypeEnum, Enums: []string{"UNSPECIFIED", "RECON", "RESOURCE_DEVELOPMENT", "INITIAL_ACCESS", "EXECUTION", "PERSISTENCE", "PRIVILEGE_ESCALATION", "DEFENSE_EVASION", "CREDENTIAL_ACCESS", "DISCOVERY", "LATERAL_MOVEMENT", "COLLECTION", "COMMAND_AND_CONTROL", "EXFILTRATION", "IMPACT"}, Default: "UNSPECIFIED"},
-		{Name: "run_on_new_beacon_callback", Type: field.TypeBool, Default: false},
-		{Name: "run_on_first_host_callback", Type: field.TypeBool, Default: false},
-		{Name: "run_on_schedule", Type: field.TypeString, Default: ""},
 		{Name: "param_defs", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
 		{Name: "hash", Type: field.TypeString, Size: 100},
 		{Name: "eldritch", Type: field.TypeString, SchemaType: map[string]string{"mysql": "LONGTEXT"}},
@@ -433,13 +869,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "tomes_users_uploader",
-				Columns:    []*schema.Column{TomesColumns[14]},
+				Columns:    []*schema.Column{TomesColumns[11]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "tomes_repositories_repository",
-				Columns:    []*schema.Column{TomesColumns[15]},
+				Columns:    []*schema.Column{TomesColumns[12]},
 				RefColumns: []*schema.Column{RepositoriesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -547,19 +983,81 @@ var (
 			},
 		},
 	}
+	// UserFavoriteHostsColumns holds the columns for the "user_favoriteHosts" table.
+	UserFavoriteHostsColumns = []*schema.Column{
+		{Name: "user_id", Type: field.TypeInt},
+		{Name: "host_id", Type: field.TypeInt},
+	}
+	// UserFavoriteHostsTable holds the schema information for the "user_favoriteHosts" table.
+	UserFavoriteHostsTable = &schema.Table{
+		Name:       "user_favoriteHosts",
+		Columns:    UserFavoriteHostsColumns,
+		PrimaryKey: []*schema.Column{UserFavoriteHostsColumns[0], UserFavoriteHostsColumns[1]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "user_favoriteHosts_user_id",
+				Columns:    []*schema.Column{UserFavoriteHostsColumns[0]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "user_favoriteHosts_host_id",
+				Columns:    []*schema.Column{UserFavoriteHostsColumns[1]},
+				RefColumns: []*schema.Column{HostsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+	}
+	// UserSubscribedHostsColumns holds the columns for the "user_subscribedHosts" table.
+	UserSubscribedHostsColumns = []*schema.Column{
+		{Name: "user_id", Type: field.TypeInt},
+		{Name: "host_id", Type: field.TypeInt},
+	}
+	// UserSubscribedHostsTable holds the schema information for the "user_subscribedHosts" table.
+	UserSubscribedHostsTable = &schema.Table{
+		Name:       "user_subscribedHosts",
+		Columns:    UserSubscribedHostsColumns,
+		PrimaryKey: []*schema.Column{UserSubscribedHostsColumns[0], UserSubscribedHostsColumns[1]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "user_subscribedHosts_user_id",
+				Columns:    []*schema.Column{UserSubscribedHostsColumns[0]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "user_subscribedHosts_host_id",
+				Columns:    []*schema.Column{UserSubscribedHostsColumns[1]},
+				RefColumns: []*schema.Column{HostsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
+		AdventuresTable,
 		AssetsTable,
 		BeaconsTable,
+		BeaconHistoriesTable,
+		BuildProfilesTable,
+		BuildTasksTable,
+		BuildersTable,
+		DeviceAuthsTable,
+		EventsTable,
 		HostsTable,
 		HostCredentialsTable,
 		HostFilesTable,
 		HostProcessesTable,
 		LinksTable,
+		NotificationsTable,
 		PortalsTable,
 		QuestsTable,
 		RepositoriesTable,
+		ScheduledTasksTable,
+		ScreenshotsTable,
 		ShellsTable,
+		ShellPivotsTable,
+		ShellTasksTable,
 		TagsTable,
 		TasksTable,
 		TomesTable,
@@ -567,10 +1065,16 @@ var (
 		HostTagsTable,
 		ShellActiveUsersTable,
 		TomeAssetsTable,
+		UserFavoriteHostsTable,
+		UserSubscribedHostsTable,
 	}
 )
 
 func init() {
+	AdventuresTable.Annotation = &entsql.Annotation{
+		Collation: "utf8mb4_general_ci",
+	}
+	AssetsTable.ForeignKeys[0].RefTable = UsersTable
 	AssetsTable.Annotation = &entsql.Annotation{
 		Collation: "utf8mb4_general_ci",
 	}
@@ -578,40 +1082,78 @@ func init() {
 	BeaconsTable.Annotation = &entsql.Annotation{
 		Collation: "utf8mb4_general_ci",
 	}
-	HostsTable.ForeignKeys[0].RefTable = TomesTable
+	BeaconHistoriesTable.ForeignKeys[0].RefTable = BeaconsTable
+	BuildProfilesTable.Annotation = &entsql.Annotation{
+		Collation: "utf8mb4_general_ci",
+	}
+	BuildTasksTable.ForeignKeys[0].RefTable = BuildersTable
+	BuildTasksTable.ForeignKeys[1].RefTable = BuildProfilesTable
+	BuildTasksTable.ForeignKeys[2].RefTable = AssetsTable
+	BuildTasksTable.Annotation = &entsql.Annotation{
+		Collation: "utf8mb4_general_ci",
+	}
+	BuildersTable.Annotation = &entsql.Annotation{
+		Collation: "utf8mb4_general_ci",
+	}
+	DeviceAuthsTable.ForeignKeys[0].RefTable = UsersTable
+	DeviceAuthsTable.Annotation = &entsql.Annotation{
+		Collation: "utf8mb4_general_ci",
+	}
+	EventsTable.ForeignKeys[0].RefTable = BeaconsTable
+	EventsTable.ForeignKeys[1].RefTable = HostsTable
+	EventsTable.ForeignKeys[2].RefTable = QuestsTable
+	EventsTable.ForeignKeys[3].RefTable = UsersTable
+	EventsTable.Annotation = &entsql.Annotation{
+		Collation: "utf8mb4_general_ci",
+	}
+	HostsTable.ForeignKeys[0].RefTable = ScheduledTasksTable
 	HostsTable.Annotation = &entsql.Annotation{
 		Collation: "utf8mb4_general_ci",
 	}
 	HostCredentialsTable.ForeignKeys[0].RefTable = HostsTable
-	HostCredentialsTable.ForeignKeys[1].RefTable = TasksTable
+	HostCredentialsTable.ForeignKeys[1].RefTable = ShellTasksTable
+	HostCredentialsTable.ForeignKeys[2].RefTable = TasksTable
 	HostCredentialsTable.Annotation = &entsql.Annotation{
 		Collation: "utf8mb4_general_ci",
 	}
 	HostFilesTable.ForeignKeys[0].RefTable = HostsTable
 	HostFilesTable.ForeignKeys[1].RefTable = HostsTable
-	HostFilesTable.ForeignKeys[2].RefTable = TasksTable
+	HostFilesTable.ForeignKeys[2].RefTable = ShellTasksTable
+	HostFilesTable.ForeignKeys[3].RefTable = TasksTable
 	HostFilesTable.Annotation = &entsql.Annotation{
 		Collation: "utf8mb4_general_ci",
 	}
 	HostProcessesTable.ForeignKeys[0].RefTable = HostsTable
 	HostProcessesTable.ForeignKeys[1].RefTable = HostsTable
-	HostProcessesTable.ForeignKeys[2].RefTable = TasksTable
+	HostProcessesTable.ForeignKeys[2].RefTable = ShellTasksTable
+	HostProcessesTable.ForeignKeys[3].RefTable = TasksTable
 	HostProcessesTable.Annotation = &entsql.Annotation{
 		Collation: "utf8mb4_general_ci",
 	}
 	LinksTable.ForeignKeys[0].RefTable = AssetsTable
+	LinksTable.ForeignKeys[1].RefTable = UsersTable
 	LinksTable.Annotation = &entsql.Annotation{
 		Collation: "utf8mb4_general_ci",
 	}
+	NotificationsTable.ForeignKeys[0].RefTable = UsersTable
+	NotificationsTable.ForeignKeys[1].RefTable = EventsTable
+	NotificationsTable.Annotation = &entsql.Annotation{
+		Collation: "utf8mb4_general_ci",
+	}
 	PortalsTable.ForeignKeys[0].RefTable = TasksTable
-	PortalsTable.ForeignKeys[1].RefTable = BeaconsTable
-	PortalsTable.ForeignKeys[2].RefTable = UsersTable
+	PortalsTable.ForeignKeys[1].RefTable = ShellTasksTable
+	PortalsTable.ForeignKeys[2].RefTable = BeaconsTable
+	PortalsTable.ForeignKeys[3].RefTable = UsersTable
+	PortalsTable.ForeignKeys[4].RefTable = ShellsTable
 	PortalsTable.Annotation = &entsql.Annotation{
 		Collation: "utf8mb4_general_ci",
 	}
-	QuestsTable.ForeignKeys[0].RefTable = TomesTable
-	QuestsTable.ForeignKeys[1].RefTable = AssetsTable
-	QuestsTable.ForeignKeys[2].RefTable = UsersTable
+	QuestsTable.ForeignKeys[0].RefTable = AdventuresTable
+	QuestsTable.ForeignKeys[1].RefTable = TomesTable
+	QuestsTable.ForeignKeys[2].RefTable = AssetsTable
+	QuestsTable.ForeignKeys[3].RefTable = UsersTable
+	QuestsTable.ForeignKeys[4].RefTable = QuestsTable
+	QuestsTable.ForeignKeys[5].RefTable = ScheduledTasksTable
 	QuestsTable.Annotation = &entsql.Annotation{
 		Collation: "utf8mb4_general_ci",
 	}
@@ -620,12 +1162,30 @@ func init() {
 		Table:     "repositories",
 		Collation: "utf8mb4_general_ci",
 	}
+	ScheduledTasksTable.ForeignKeys[0].RefTable = TomesTable
+	ScheduledTasksTable.Annotation = &entsql.Annotation{
+		Collation: "utf8mb4_general_ci",
+	}
+	ScreenshotsTable.ForeignKeys[0].RefTable = HostsTable
+	ScreenshotsTable.ForeignKeys[1].RefTable = ShellTasksTable
+	ScreenshotsTable.ForeignKeys[2].RefTable = TasksTable
+	ScreenshotsTable.Annotation = &entsql.Annotation{
+		Collation: "utf8mb4_general_ci",
+	}
 	ShellsTable.ForeignKeys[0].RefTable = TasksTable
 	ShellsTable.ForeignKeys[1].RefTable = BeaconsTable
 	ShellsTable.ForeignKeys[2].RefTable = UsersTable
 	ShellsTable.Annotation = &entsql.Annotation{
 		Collation: "utf8mb4_general_ci",
 	}
+	ShellPivotsTable.ForeignKeys[0].RefTable = ShellsTable
+	ShellPivotsTable.ForeignKeys[1].RefTable = PortalsTable
+	ShellPivotsTable.ForeignKeys[2].RefTable = HostCredentialsTable
+	ShellPivotsTable.Annotation = &entsql.Annotation{
+		Collation: "utf8mb4_general_ci",
+	}
+	ShellTasksTable.ForeignKeys[0].RefTable = ShellsTable
+	ShellTasksTable.ForeignKeys[1].RefTable = UsersTable
 	TagsTable.Annotation = &entsql.Annotation{
 		Collation: "utf8mb4_general_ci",
 	}
@@ -649,4 +1209,8 @@ func init() {
 	ShellActiveUsersTable.ForeignKeys[1].RefTable = UsersTable
 	TomeAssetsTable.ForeignKeys[0].RefTable = TomesTable
 	TomeAssetsTable.ForeignKeys[1].RefTable = AssetsTable
+	UserFavoriteHostsTable.ForeignKeys[0].RefTable = UsersTable
+	UserFavoriteHostsTable.ForeignKeys[1].RefTable = HostsTable
+	UserSubscribedHostsTable.ForeignKeys[0].RefTable = UsersTable
+	UserSubscribedHostsTable.ForeignKeys[1].RefTable = HostsTable
 }
